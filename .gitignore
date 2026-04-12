@@ -1,0 +1,8 @@
+node_modules/
+runtime/
+data/workouts.db
+data/workouts.db-wal
+data/workouts.db-shm
+data/workouts_backup_*.db
+.claude/
+NUL

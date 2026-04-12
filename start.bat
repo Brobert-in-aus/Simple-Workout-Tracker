@@ -1,0 +1,116 @@
+@echo off
+:: ============================================================
+::  Workout Tracker - Start Server
+::  Double-click this to launch. Access from any device on LAN.
+:: ============================================================
+
+title Workout Tracker
+color 0B
+
+cd /d "%~dp0"
+
+:: --- Find Node.js (portable first, then system) ---
+
+set "NODE="
+set "NPM="
+
+if exist "runtime\node.exe" (
+    set "NODE=%CD%\runtime\node.exe"
+    set "NPM=%CD%\runtime\npm.cmd"
+    set "PATH=%CD%\runtime;%PATH%"
+) else (
+    where node >nul 2>&1
+    if not errorlevel 1 (
+        set "NODE=node"
+        set "NPM=npm"
+    )
+)
+
+if "%NODE%"=="" (
+    echo.
+    echo  ERROR: Node.js not found.
+    echo  Run setup.bat first to download portable Node.js,
+    echo  or install Node.js from https://nodejs.org
+    echo.
+    pause
+    exit /b 1
+)
+
+:: --- Check dependencies ---
+
+if not exist "node_modules\express" (
+    echo.
+    echo  Dependencies not found. Installing...
+    echo.
+    call "%NPM%" install --production
+    echo.
+)
+
+:: --- Launch ---
+
+:start
+cls
+echo ============================================
+echo        SIMPLE WORKOUT TRACKER
+echo ============================================
+echo.
+echo  Starting server...
+echo.
+
+:: Start server in background, pipe output to temp file
+set "LOGFILE=%TEMP%\workout-tracker-log.txt"
+start /b cmd /c ""%NODE%" "%~dp0server.js" > "%LOGFILE%" 2>&1"
+
+:: Wait for server to start and grab the output
+timeout /t 2 /nobreak >nul
+
+:: Find the node PID
+for /f "tokens=2" %%a in ('tasklist /fi "imagename eq node.exe" /fo list ^| findstr "PID"') do set PID=%%a
+
+:: Display connection details
+echo  Server running (PID: %PID%)
+echo.
+if exist "%LOGFILE%" type "%LOGFILE%"
+echo.
+echo ============================================
+echo.
+echo  Open in browser:
+echo    Local:  http://localhost:3000
+echo.
+:: Show LAN IPs
+for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do (
+    for /f "tokens=1" %%b in ("%%a") do (
+        echo    LAN:    http://%%b:3000
+    )
+)
+echo.
+echo ============================================
+echo.
+echo  Commands:
+echo    [R] Restart server
+echo    [Q] Quit
+echo.
+echo ============================================
+
+:menu
+set "choice="
+set /p "choice=  > "
+if /i "%choice%"=="r" goto restart
+if /i "%choice%"=="q" goto quit
+goto menu
+
+:restart
+echo.
+echo  Stopping server...
+taskkill /f /pid %PID% >nul 2>&1
+timeout /t 1 /nobreak >nul
+goto start
+
+:quit
+echo.
+echo  Stopping server...
+taskkill /f /pid %PID% >nul 2>&1
+del "%LOGFILE%" >nul 2>&1
+echo  Goodbye!
+timeout /t 1 /nobreak >nul
+exit

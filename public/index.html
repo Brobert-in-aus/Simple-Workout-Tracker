@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Workout Tracker</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Workout Tab -->
+    <div id="tab-workout" class="tab-content active">
+      <div class="week-nav">
+        <button id="week-prev" class="btn-icon">&larr;</button>
+        <span id="week-display"></span>
+        <button id="week-next" class="btn-icon">&rarr;</button>
+      </div>
+      <div class="week-strip" id="week-strip"></div>
+      <div id="exercises-list"></div>
+    </div>
+
+    <!-- History Tab -->
+    <div id="tab-history" class="tab-content">
+      <h2>History</h2>
+      <div id="history-list"></div>
+      <div id="history-detail" class="hidden"></div>
+    </div>
+
+    <!-- Template Tab -->
+    <div id="tab-template" class="tab-content">
+      <h2>Workout Template</h2>
+      <div id="template-days"></div>
+    </div>
+
+    <!-- Bottom Nav -->
+    <nav class="bottom-nav">
+      <button class="nav-btn active" data-tab="workout">
+        <span class="nav-icon">&#9899;</span>
+        <span>Workout</span>
+      </button>
+      <button class="nav-btn" data-tab="history">
+        <span class="nav-icon">&#9776;</span>
+        <span>History</span>
+      </button>
+      <button class="nav-btn" data-tab="template">
+        <span class="nav-icon">&#9881;</span>
+        <span>Template</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- Exercise Progression Modal -->
+  <div id="progression-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="progression-title"></h3>
+        <button id="progression-close" class="btn-icon">&times;</button>
+      </div>
+      <div id="progression-body"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
