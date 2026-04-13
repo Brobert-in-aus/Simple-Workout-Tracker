@@ -110,6 +110,28 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
   });
 });
 
+// --- Double-tap Workout button to scroll to next uncompleted exercise ---
+{
+  const workoutBtn = document.querySelector('.nav-btn[data-tab="workout"]');
+  let lastTap = 0;
+  workoutBtn.addEventListener('click', () => {
+    const now = Date.now();
+    if (now - lastTap < 400) {
+      // Double-tap: scroll to lowest uncompleted exercise if workout is active
+      const cards = document.querySelectorAll('#exercises-list .exercise-card:not(.skipped):not(.preview-card)');
+      let target = null;
+      for (const card of cards) {
+        const checks = card.querySelectorAll('.set-check');
+        if (checks.length === 0) continue;
+        const allDone = Array.from(checks).every(c => c.classList.contains('done'));
+        if (!allDone) target = card;
+      }
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    lastTap = now;
+  });
+}
+
 // --- Week Navigation ---
 document.getElementById('week-prev').addEventListener('click', () => {
   currentWeekStart = shiftDate(currentWeekStart, -7);

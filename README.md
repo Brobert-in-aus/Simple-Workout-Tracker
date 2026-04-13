@@ -14,6 +14,7 @@ A portable, self-hosted workout tracker built with Node.js and vanilla HTML/CSS/
 - **Per-set tracking** — log weight, reps, and duration for every set
 - **Workout history** — browse past sessions with full set-by-set detail
 - **Exercise history** — view recent performance trends per exercise
+- **Quick-navigate** — double-tap the Workout tab to jump to your lowest uncompleted exercise
 - **Portable** — runs entirely from a single folder with no system-wide install required
 
 ## Quick Start (Windows)
