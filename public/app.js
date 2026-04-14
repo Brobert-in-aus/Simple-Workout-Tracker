@@ -347,8 +347,8 @@ function renderExercisesPreview(container, exercises, previous) {
         </div>
       `;
       if (prevStr) html += `<div class="previous-data">${prevStr}${prevFrom}</div>`;
-      if (prevNote && !showWarmup) html += `<div class="previous-data prev-note">${prevNote}</div>`;
       if (ex.notes && !showWarmup) html += `<div class="template-note">${ex.notes.replace(/</g, '&lt;')}</div>`;
+      if (prevNote && !showWarmup) html += `<div class="previous-data prev-note">${prevNote}</div>`;
 
       card.innerHTML = html;
       container.appendChild(card);
@@ -462,8 +462,8 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
   `;
 
   if (prevStr) html += `<div class="previous-data">${prevStr}${prevFrom}</div>`;
-  if (prevNote && !showWarmup) html += `<div class="previous-data prev-note">${prevNote}</div>`;
   if (ex.default_note && !showWarmup) html += `<div class="template-note">${ex.default_note.replace(/</g, '&lt;')}</div>`;
+  if (prevNote && !showWarmup) html += `<div class="previous-data prev-note">${prevNote}</div>`;
 
   if (!ex.skipped) {
     const targetRepsNum = parseInt(ex.target_reps) || 0;
