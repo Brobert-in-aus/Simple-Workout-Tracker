@@ -1410,6 +1410,34 @@ html, body {
   opacity: 0.85;
 }
 
+/* --- Archived (soft-deleted) exercises in template editor --- */
+.archived-exercises {
+  margin: 8px 0;
+  padding: 6px 10px;
+  background: var(--bg-card);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.archived-exercises > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  padding: 4px 0;
+  user-select: none;
+}
+.archived-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.archived-row:first-of-type { border-top: none; margin-top: 4px; }
+.archived-info { flex: 1; min-width: 0; }
+.archived-name { font-weight: 500; }
+.archived-meta { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+.archived-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
 /* --- Copy weight button --- */
 .copy-weight-btn {
   margin-left: auto;

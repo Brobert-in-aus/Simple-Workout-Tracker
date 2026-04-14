@@ -11,6 +11,19 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Initialize database on startup
 db.getDb();
 
+// Weekly backup: run at startup and re-check every 6 hours so a long-running server
+// still creates a new snapshot when a new ISO week begins. The helper is idempotent
+// (keyed by the Monday of the current week), so repeat calls within the same week are no-ops.
+function runWeeklyBackup() {
+  Promise.resolve(db.ensureWeeklyBackup())
+    .then(result => {
+      if (result && result.created) console.log(`Weekly backup created: ${result.path}`);
+    })
+    .catch(err => console.error('Weekly backup failed:', err));
+}
+runWeeklyBackup();
+setInterval(runWeeklyBackup, 6 * 60 * 60 * 1000);
+
 // --- Helper ---
 function todayISO() {
   const d = new Date();
@@ -82,7 +95,7 @@ app.post('/api/templates/:id/exercises', (req, res) => {
   // Check if this exercise exists in other templates — pre-fill from linked settings
   // Exclude same-template entries so same-template duplicates stay independent
   const templateId = parseInt(req.params.id);
-  const linked = db.getDb().prepare('SELECT * FROM day_exercises WHERE exercise_id = ? AND day_id != ? LIMIT 1').get(exerciseId, templateId);
+  const linked = db.getDb().prepare('SELECT * FROM day_exercises WHERE exercise_id = ? AND day_id != ? AND archived = 0 LIMIT 1').get(exerciseId, templateId);
   const sets = target_sets || (linked ? linked.target_sets : 3);
   const reps = target_reps || (linked ? linked.target_reps : '10');
   const warmup = is_warmup || (linked ? !!linked.is_warmup : false);
@@ -116,6 +129,23 @@ app.get('/api/day-exercises/:id/linked', (req, res) => {
 
 app.delete('/api/day-exercises/:id', (req, res) => {
   db.deleteDayExercise(parseInt(req.params.id));
+  res.json({ ok: true });
+});
+
+// List archived (soft-deleted) exercises with history for a template
+app.get('/api/templates/:id/archived-exercises', (req, res) => {
+  res.json(db.getArchivedExercisesWithHistory(parseInt(req.params.id)));
+});
+
+// Restore a soft-deleted day_exercise
+app.post('/api/day-exercises/:id/restore', (req, res) => {
+  db.restoreDayExercise(parseInt(req.params.id));
+  res.json({ ok: true });
+});
+
+// Permanently delete a day_exercise AND its workout history. Destructive; UI confirms.
+app.delete('/api/day-exercises/:id/permanent', (req, res) => {
+  db.hardDeleteDayExercise(parseInt(req.params.id));
   res.json({ ok: true });
 });
 

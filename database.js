@@ -133,6 +133,13 @@ function initSchema() {
     db.exec("ALTER TABLE day_exercises ADD COLUMN is_adhoc INTEGER NOT NULL DEFAULT 0");
   }
 
+  // Migration: add archived flag to day_exercises (soft-delete preserves workout history)
+  try {
+    db.prepare("SELECT archived FROM day_exercises LIMIT 1").get();
+  } catch (e) {
+    db.exec("ALTER TABLE day_exercises ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
+  }
+
   // Migration: populate schedule table from days if schedule is empty
   const scheduleCount = db.prepare("SELECT COUNT(*) as c FROM schedule").get().c;
   if (scheduleCount === 0) {
@@ -319,7 +326,7 @@ function getDayExercises(dayId, includeAdhoc = false) {
     SELECT de.*, e.name as exercise_name
     FROM day_exercises de
     JOIN exercises e ON e.id = de.exercise_id
-    WHERE de.day_id = ? ${adhocFilter}
+    WHERE de.day_id = ? AND de.archived = 0 ${adhocFilter}
     ORDER BY de.sort_order
   `).all(dayId);
 }
@@ -340,12 +347,47 @@ function updateDayExercise(id, fields) {
 }
 
 function deleteDayExercise(id) {
+  // Soft-delete: if the exercise has any workout history, archive it so the data is preserved.
+  // Otherwise hard-delete to avoid clutter in the "previously deleted" list.
+  const hasHistory = db.prepare('SELECT 1 FROM workout_exercises WHERE day_exercise_id = ? LIMIT 1').get(id);
+  if (hasHistory) {
+    db.prepare('UPDATE day_exercises SET archived = 1 WHERE id = ?').run(id);
+  } else {
+    db.prepare('DELETE FROM day_exercises WHERE id = ?').run(id);
+  }
+}
+
+function restoreDayExercise(id) {
+  // Place at the end of the template's sort order on restore
+  const de = db.prepare('SELECT day_id FROM day_exercises WHERE id = ?').get(id);
+  if (!de) return;
+  const maxSort = db.prepare(
+    'SELECT COALESCE(MAX(sort_order), -1) as m FROM day_exercises WHERE day_id = ? AND archived = 0'
+  ).get(de.day_id).m;
+  db.prepare('UPDATE day_exercises SET archived = 0, sort_order = ? WHERE id = ?').run(maxSort + 1, id);
+}
+
+function hardDeleteDayExercise(id) {
+  // Permanently removes the day_exercise AND its workout history. Destructive.
   const txn = db.transaction(() => {
-    // Delete related workout_exercises first (workout_sets cascade from there)
     db.prepare('DELETE FROM workout_exercises WHERE day_exercise_id = ?').run(id);
     db.prepare('DELETE FROM day_exercises WHERE id = ?').run(id);
   });
   txn();
+}
+
+function getArchivedExercisesWithHistory(templateId) {
+  return db.prepare(`
+    SELECT de.*, e.name as exercise_name,
+           (SELECT COUNT(*) FROM workout_exercises WHERE day_exercise_id = de.id) as history_count,
+           (SELECT MAX(w.date) FROM workout_exercises we
+              JOIN workouts w ON w.id = we.workout_id
+              WHERE we.day_exercise_id = de.id) as last_used
+    FROM day_exercises de
+    JOIN exercises e ON e.id = de.exercise_id
+    WHERE de.day_id = ? AND de.archived = 1
+    ORDER BY last_used DESC
+  `).all(templateId);
 }
 
 function reorderDayExercises(dayId, orderedIds) {
@@ -605,9 +647,10 @@ function syncLinkedExercises(dayExerciseId, fields) {
   }
   if (updates.length === 0) return;
   // Only sync across different templates, matching by role (warmup↔warmup, main↔main)
-  // This prevents a warmup in one template from overwriting a main set in another
+  // This prevents a warmup in one template from overwriting a main set in another.
+  // Skip archived rows so soft-deleted exercises aren't silently un-updated.
   values.push(de.exercise_id, dayExerciseId, de.day_id, de.is_warmup);
-  db.prepare(`UPDATE day_exercises SET ${updates.join(', ')} WHERE exercise_id = ? AND id != ? AND day_id != ? AND is_warmup = ?`).run(...values);
+  db.prepare(`UPDATE day_exercises SET ${updates.join(', ')} WHERE exercise_id = ? AND id != ? AND day_id != ? AND is_warmup = ? AND archived = 0`).run(...values);
 }
 
 function getTemplatesForExercise(exerciseId) {
@@ -615,7 +658,7 @@ function getTemplatesForExercise(exerciseId) {
     SELECT DISTINCT d.id, d.name
     FROM day_exercises de
     JOIN days d ON d.id = de.day_id
-    WHERE de.exercise_id = ?
+    WHERE de.exercise_id = ? AND de.archived = 0
     ORDER BY d.name
   `).all(exerciseId);
 }
@@ -623,14 +666,14 @@ function getTemplatesForExercise(exerciseId) {
 function getLinkedInfoForTemplate(templateId) {
   // Returns day_exercise_id -> list of other template names for all exercises in this template
   // Only matches by role (warmup↔warmup, main↔main) so links are accurate
-  const exercises = db.prepare('SELECT id, exercise_id, is_warmup FROM day_exercises WHERE day_id = ?').all(templateId);
+  const exercises = db.prepare('SELECT id, exercise_id, is_warmup FROM day_exercises WHERE day_id = ? AND archived = 0').all(templateId);
   const result = {};
   for (const ex of exercises) {
     const others = db.prepare(`
       SELECT DISTINCT d.name
       FROM day_exercises de
       JOIN days d ON d.id = de.day_id
-      WHERE de.exercise_id = ? AND de.day_id != ? AND de.is_warmup = ?
+      WHERE de.exercise_id = ? AND de.day_id != ? AND de.is_warmup = ? AND de.archived = 0
       ORDER BY d.name
     `).all(ex.exercise_id, templateId, ex.is_warmup);
     if (others.length > 0) {
@@ -723,9 +766,32 @@ function closeDb() {
   }
 }
 
+// Create a weekly backup of the DB if one doesn't already exist for the current week.
+// Keyed by the Monday of the current week so running the server any day that week is a no-op
+// after the first successful run.
+function ensureWeeklyBackup() {
+  const fs = require('fs');
+  const now = new Date();
+  const jsDay = now.getDay(); // 0=Sun
+  const diffToMonday = jsDay === 0 ? -6 : 1 - jsDay;
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + diffToMonday);
+  monday.setHours(0, 0, 0, 0);
+  const iso = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`;
+
+  const backupDir = path.join(__dirname, 'data', 'backups');
+  if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+  const backupPath = path.join(backupDir, `workouts-${iso}.db`);
+  if (fs.existsSync(backupPath)) return { created: false, path: backupPath };
+
+  // Uses SQLite's online backup API via better-sqlite3 — handles the WAL correctly.
+  return getDb().backup(backupPath).then(() => ({ created: true, path: backupPath }));
+}
+
 module.exports = {
   getDb,
   closeDb,
+  ensureWeeklyBackup,
   getOrCreateExercise,
   getAllExercises,
   // Template management
@@ -747,6 +813,9 @@ module.exports = {
   getDayExercises,
   updateDayExercise,
   deleteDayExercise,
+  restoreDayExercise,
+  hardDeleteDayExercise,
+  getArchivedExercisesWithHistory,
   reorderDayExercises,
   // Workout helpers
   getOrCreateWorkout,

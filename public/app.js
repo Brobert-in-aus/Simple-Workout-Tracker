@@ -1360,6 +1360,7 @@ function showCreateTemplateForm(section, btn) {
 async function loadTemplateExercises(templateId, container) {
   const exercises = await api(`/api/templates/${templateId}/exercises`);
   const allExercises = await api('/api/exercises');
+  const archived = await api(`/api/templates/${templateId}/archived-exercises`);
   let html = '';
 
   for (let i = 0; i < exercises.length; i++) {
@@ -1421,6 +1422,26 @@ async function loadTemplateExercises(templateId, container) {
           </div>
         </div>
       </div>
+    `;
+  }
+
+  if (archived.length > 0) {
+    html += `
+      <details class="archived-exercises" data-tmpl="${templateId}">
+        <summary>Previously deleted (${archived.length}) — history preserved</summary>
+        ${archived.map(a => `
+          <div class="archived-row" data-deid="${a.id}">
+            <div class="archived-info">
+              <div class="archived-name">${a.exercise_name}${a.is_warmup ? ' <span class="warmup-badge">Warmup</span>' : ''}</div>
+              <div class="archived-meta">${a.history_count} session${a.history_count === 1 ? '' : 's'}${a.last_used ? ` · last ${a.last_used}` : ''}</div>
+            </div>
+            <div class="archived-actions">
+              <button class="btn btn-sm archived-restore" data-deid="${a.id}">Restore</button>
+              <button class="btn btn-sm btn-danger archived-purge" data-deid="${a.id}" title="Permanently delete this exercise and its workout history">&times;</button>
+            </div>
+          </div>
+        `).join('')}
+      </details>
     `;
   }
 
@@ -1775,6 +1796,27 @@ async function loadTemplateExercises(templateId, container) {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       await api(`/api/day-exercises/${btn.dataset.deid}`, { method: 'DELETE' });
+      loadTemplateExercises(templateId, container);
+    });
+  });
+
+  // Archived exercise: restore
+  container.querySelectorAll('.archived-restore').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await api(`/api/day-exercises/${btn.dataset.deid}/restore`, { method: 'POST' });
+      loadTemplateExercises(templateId, container);
+    });
+  });
+
+  // Archived exercise: permanent delete (destroys history)
+  container.querySelectorAll('.archived-purge').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const row = btn.closest('.archived-row');
+      const name = row.querySelector('.archived-name').textContent.trim();
+      if (!confirm(`Permanently delete "${name}" and all of its workout history?\n\nThis cannot be undone.`)) return;
+      await api(`/api/day-exercises/${btn.dataset.deid}/permanent`, { method: 'DELETE' });
       loadTemplateExercises(templateId, container);
     });
   });
