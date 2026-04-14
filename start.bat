@@ -88,6 +88,7 @@ echo ============================================
 echo.
 echo  Commands:
 echo    [R] Restart server
+echo    [U] Update (git pull) and restart
 echo    [Q] Quit
 echo.
 echo ============================================
@@ -96,6 +97,7 @@ echo ============================================
 set "choice="
 set /p "choice=  > "
 if /i "%choice%"=="r" goto restart
+if /i "%choice%"=="u" goto update
 if /i "%choice%"=="q" goto quit
 goto menu
 
@@ -103,6 +105,24 @@ goto menu
 echo.
 echo  Stopping server...
 taskkill /f /pid %PID% >nul 2>&1
+timeout /t 1 /nobreak >nul
+goto start
+
+:update
+echo.
+echo  Stopping server...
+taskkill /f /pid %PID% >nul 2>&1
+echo  Pulling latest changes...
+echo.
+git pull
+if errorlevel 1 (
+    echo.
+    echo  WARNING: git pull failed. Check your connection or resolve conflicts.
+    echo  Restarting server with current code...
+)
+echo.
+echo  Reinstalling dependencies...
+call "%NPM%" install --production 2>&1
 timeout /t 1 /nobreak >nul
 goto start
 
