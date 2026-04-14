@@ -292,6 +292,14 @@ async function loadWorkout() {
     } else {
       // Active workout
       renderExercises(container, workout, previous);
+      // Add-exercise button
+      const addExDiv = document.createElement('div');
+      addExDiv.className = 'add-exercise-to-workout';
+      addExDiv.innerHTML = `<button class="btn btn-sm btn-outline add-ex-to-workout-btn">+ Add Exercise</button>`;
+      addExDiv.querySelector('.add-ex-to-workout-btn').addEventListener('click', () => {
+        showAddExerciseToWorkoutPanel(addExDiv, workout);
+      });
+      container.appendChild(addExDiv);
     }
   }
 }
@@ -340,6 +348,7 @@ function renderExercisesPreview(container, exercises, previous) {
       `;
       if (prevStr) html += `<div class="previous-data">${prevStr}${prevFrom}</div>`;
       if (prevNote && !showWarmup) html += `<div class="previous-data prev-note">${prevNote}</div>`;
+      if (ex.notes && !showWarmup) html += `<div class="template-note">${ex.notes.replace(/</g, '&lt;')}</div>`;
 
       card.innerHTML = html;
       container.appendChild(card);
@@ -423,6 +432,8 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
   const prevNote = prev && prev.note ? prev.note : '';
   const prevFrom = prev && prev.from_template ? ` (from ${prev.from_template})` : '';
   const showWarmup = isWarmupExercise(ex, prev);
+  const isSwapped = !!ex.override_exercise_name;
+  const displayName = isSwapped ? ex.override_exercise_name : ex.exercise_name;
 
   let html = '';
 
@@ -433,7 +444,7 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
 
   html += `
     <div class="exercise-header">
-      <span class="exercise-name">${ex.exercise_name}${showWarmup ? '<span class="warmup-badge">Warmup</span>' : ''}${isDuration ? '<span class="duration-badge">Duration</span>' : ''}${ex.is_amrap ? `<span class="amrap-badge">${ex.amrap_last_only ? 'AMRAP Last' : 'AMRAP'}</span>` : ''}</span>
+      <span class="exercise-name">${displayName}${isSwapped ? `<span class="swap-badge" title="Swapped from ${ex.exercise_name}">&#x21C4;</span>` : ''}${showWarmup ? '<span class="warmup-badge">Warmup</span>' : ''}${isDuration ? '<span class="duration-badge">Duration</span>' : ''}${ex.is_amrap ? `<span class="amrap-badge">${ex.amrap_last_only ? 'AMRAP Last' : 'AMRAP'}</span>` : ''}</span>
       <span class="exercise-target">${isDuration ? `${ex.target_sets} sets` : `${ex.target_sets}&times;${ex.target_reps}`}</span>
       <div class="reorder-btns">
         <button class="reorder-btn move-up" data-weid="${ex.id}">&uarr;</button>
@@ -444,11 +455,15 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
       <button class="skip-toggle ${ex.skipped ? 'is-skipped' : ''}" data-weid="${ex.id}">
         ${ex.skipped ? '&#x21A9; Unskip' : '&#x2715; Skip'}
       </button>
+      <button class="swap-toggle${isSwapped ? ' is-swapped' : ''}" data-weid="${ex.id}">
+        ${isSwapped ? '&#x21A9; Restore' : '&#x21C4; Alt'}
+      </button>
     </div>
   `;
 
   if (prevStr) html += `<div class="previous-data">${prevStr}${prevFrom}</div>`;
   if (prevNote && !showWarmup) html += `<div class="previous-data prev-note">${prevNote}</div>`;
+  if (ex.default_note && !showWarmup) html += `<div class="template-note">${ex.default_note.replace(/</g, '&lt;')}</div>`;
 
   if (!ex.skipped) {
     const targetRepsNum = parseInt(ex.target_reps) || 0;
@@ -517,11 +532,13 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
 
   // Event listeners
   card.querySelector('.skip-toggle').addEventListener('click', () => toggleSkip(ex, workout));
+  card.querySelector('.swap-toggle').addEventListener('click', () => handleSwap(ex, workout, card));
 
   // Track previous weight values for auto-match bulk update
   card.querySelectorAll('.weight-input').forEach(input => {
     input.addEventListener('focus', () => {
       input.dataset.prevWeight = input.value;
+      moveCursorToEnd(input);
     });
     input.addEventListener('change', () => {
       autoMatchWeights(input, card);
@@ -531,6 +548,7 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
   });
 
   card.querySelectorAll('.set-input:not(.weight-input)').forEach(input => {
+    input.addEventListener('focus', () => moveCursorToEnd(input));
     input.addEventListener('change', () => debounceSave(ex));
     input.addEventListener('input', () => debounceSave(ex));
   });
@@ -586,6 +604,120 @@ async function toggleSkip(ex, workout) {
   loadWorkout();
 }
 
+async function handleSwap(ex, workout, card) {
+  if (ex.override_exercise_name) {
+    // Restore original exercise
+    await api(`/api/workout/${currentDate}/exercise/${ex.id}/swap`, {
+      method: 'PUT',
+      body: { exercise_name: null },
+    });
+    loadWorkout();
+    return;
+  }
+
+  // Show inline swap panel
+  const subHeader = card.querySelector('.exercise-sub-header');
+  if (subHeader.querySelector('.swap-panel')) return;
+
+  const allExercises = await api('/api/exercises');
+  const listId = `swap-list-${ex.id}`;
+  const panel = document.createElement('div');
+  panel.className = 'swap-panel';
+  panel.innerHTML = `
+    <input type="text" class="swap-input" placeholder="Alternative exercise name" autocomplete="off" list="${listId}">
+    <datalist id="${listId}">${allExercises.map(e => `<option value="${e.name}">`).join('')}</datalist>
+    <button class="btn btn-sm swap-confirm">OK</button>
+    <button class="btn btn-sm swap-cancel">Cancel</button>
+  `;
+  subHeader.appendChild(panel);
+
+  const input = panel.querySelector('.swap-input');
+  input.focus();
+
+  panel.querySelector('.swap-cancel').addEventListener('click', () => panel.remove());
+  panel.querySelector('.swap-confirm').addEventListener('click', async () => {
+    const name = input.value.trim();
+    if (!name) { panel.remove(); return; }
+    await api(`/api/workout/${currentDate}/exercise/${ex.id}/swap`, {
+      method: 'PUT',
+      body: { exercise_name: name },
+    });
+    loadWorkout();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') panel.querySelector('.swap-confirm').click();
+    if (e.key === 'Escape') panel.remove();
+  });
+}
+
+async function showAddExerciseToWorkoutPanel(container, workout) {
+  if (container.querySelector('.add-ex-panel')) return;
+
+  const allExercises = await api('/api/exercises');
+  const exercises = workout.exercises;
+  const listId = `add-ex-list-${workout.id}`;
+
+  // Build "after" options: None (add at top) + each exercise
+  const afterOptions = [`<option value="-1">At the top</option>`]
+    .concat(exercises.map((ex, i) => {
+      const label = ex.override_exercise_name || ex.exercise_name;
+      return `<option value="${ex.sort_order}" ${i === exercises.length - 1 ? 'selected' : ''}>${label}</option>`;
+    })).join('');
+
+  const panel = document.createElement('div');
+  panel.className = 'add-ex-panel';
+  panel.innerHTML = `
+    <input type="text" class="add-ex-name" placeholder="Exercise name" autocomplete="off" list="${listId}">
+    <datalist id="${listId}">${allExercises.map(e => `<option value="${e.name}">`).join('')}</datalist>
+    <div class="add-ex-row">
+      <input type="number" class="add-ex-sets" value="3" placeholder="Sets" inputmode="numeric" min="1">
+      <span>&times;</span>
+      <input type="text" class="add-ex-reps" value="10" placeholder="Reps">
+    </div>
+    <label class="add-ex-after-label">After:
+      <select class="add-ex-after">${afterOptions}</select>
+    </label>
+    <label class="add-ex-template-label">
+      <input type="checkbox" class="add-ex-template"> Save to template
+    </label>
+    <div class="add-ex-actions">
+      <button class="btn btn-sm add-ex-confirm">Add</button>
+      <button class="btn btn-sm add-ex-cancel">Cancel</button>
+    </div>
+  `;
+  container.appendChild(panel);
+
+  const nameInput = panel.querySelector('.add-ex-name');
+  nameInput.focus();
+
+  panel.querySelector('.add-ex-cancel').addEventListener('click', () => panel.remove());
+  panel.querySelector('.add-ex-confirm').addEventListener('click', async () => {
+    const name = nameInput.value.trim();
+    if (!name) return;
+    const targetSets = parseInt(panel.querySelector('.add-ex-sets').value) || 3;
+    const targetReps = panel.querySelector('.add-ex-reps').value.trim() || '10';
+    const afterSortOrder = parseInt(panel.querySelector('.add-ex-after').value);
+    const saveToTemplate = panel.querySelector('.add-ex-template').checked;
+
+    await api(`/api/workout/${currentDate}/add-exercise`, {
+      method: 'POST',
+      body: {
+        workout_id: workout.id,
+        name,
+        target_sets: targetSets,
+        target_reps: targetReps,
+        after_sort_order: afterSortOrder >= 0 ? afterSortOrder : null,
+        save_to_template: saveToTemplate,
+      },
+    });
+    loadWorkout();
+  });
+
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') panel.remove();
+  });
+}
+
 function debounceSave(ex) {
   if (saveTimers[ex.id]) clearTimeout(saveTimers[ex.id]);
   saveTimers[ex.id] = setTimeout(() => saveExercise(ex), 500);
@@ -634,6 +766,13 @@ async function saveExercise(ex) {
   });
 }
 
+function moveCursorToEnd(input) {
+  const t = input.type;
+  input.type = 'text';
+  input.setSelectionRange(input.value.length, input.value.length);
+  input.type = t;
+}
+
 function autoMatchWeights(changedInput, card) {
   const prevWeight = changedInput.dataset.prevWeight;
   if (prevWeight === undefined || prevWeight === '') return;
@@ -642,6 +781,12 @@ function autoMatchWeights(changedInput, card) {
 
   const allWeights = card.querySelectorAll('.weight-input');
   if (allWeights.length <= 1) return;
+
+  // Only auto-match when the first set's weight is changed
+  if (changedInput !== allWeights[0]) {
+    changedInput.dataset.prevWeight = newWeight;
+    return;
+  }
 
   // Check if all OTHER inputs had the same value as the changed input's previous value
   let allSame = true;
@@ -724,6 +869,7 @@ function addSet(ex, card) {
   container.appendChild(row);
 
   row.querySelectorAll('.set-input').forEach(input => {
+    input.addEventListener('focus', () => moveCursorToEnd(input));
     input.addEventListener('change', () => debounceSave(ex));
     input.addEventListener('input', () => debounceSave(ex));
   });
@@ -864,7 +1010,8 @@ async function showHistoryDetail(date) {
     for (const ex of workout.exercises) {
       const exIsDuration = !!ex.is_duration;
       html += `<div class="history-detail-card">`;
-      html += `<div class="history-exercise-name" data-exercise-id="${ex.day_exercise_id}">${ex.exercise_name}</div>`;
+      const histDisplayName = ex.override_exercise_name || ex.exercise_name;
+      html += `<div class="history-exercise-name" data-exercise-id="${ex.day_exercise_id}">${histDisplayName}${ex.override_exercise_name ? ` <span class="swap-badge" title="Swapped from ${ex.exercise_name}">&#x21C4;</span>` : ''}</div>`;
       if (ex.skipped) {
         html += `<div class="history-sets">Skipped</div>`;
       } else if (ex.sets.length > 0) {
@@ -1260,6 +1407,7 @@ async function loadTemplateExercises(templateId, container) {
               ${ex.is_amrap ? `<span class="amrap-badge">${ex.amrap_last_only ? 'AMRAP Last' : 'AMRAP'}</span>` : ''}
             </div>
             <div class="template-exercise-detail">${ex.is_duration ? `${ex.target_sets} sets` : `${ex.target_sets}&times;${ex.target_reps}`}</div>
+            ${ex.notes ? `<div class="template-exercise-note">${ex.notes.replace(/</g, '&lt;')}</div>` : ''}
             ${ex.linked_templates && ex.linked_templates.length > 0 ? `<div class="linked-indicator">Linked: ${ex.linked_templates.join(', ')}</div>` : ''}
           </div>
           <div class="template-exercise-actions">
@@ -1374,12 +1522,14 @@ async function loadTemplateExercises(templateId, container) {
             <span class="inline-edit-x">&times;</span>
             <input type="text" class="inline-edit-reps" value="${ex.target_reps}" placeholder="Reps">
           </div>
+          <input type="text" class="inline-edit-note" value="${(ex.notes || '').replace(/"/g, '&quot;')}" placeholder="Note (shown during workout)">
         </div>
       `;
 
       const nameInput = info.querySelector('.inline-edit-name');
       const setsInput = info.querySelector('.inline-edit-sets');
       const repsInput = info.querySelector('.inline-edit-reps');
+      const noteInput = info.querySelector('.inline-edit-note');
 
       // Delay focus to avoid the current click event causing immediate blur
       requestAnimationFrame(() => {
@@ -1387,7 +1537,7 @@ async function loadTemplateExercises(templateId, container) {
         nameInput.select();
       });
 
-      const restoreDisplay = (name, sets, reps) => {
+      const restoreDisplay = (name, sets, reps, notes) => {
         info.innerHTML = `
           <div class="template-exercise-name">
             ${name}
@@ -1396,6 +1546,7 @@ async function loadTemplateExercises(templateId, container) {
             ${ex.is_amrap ? `<span class="amrap-badge">${ex.amrap_last_only ? 'AMRAP Last' : 'AMRAP'}</span>` : ''}
           </div>
           <div class="template-exercise-detail">${ex.is_duration ? `${sets} sets` : `${sets}&times;${reps}`}</div>
+          ${notes ? `<div class="template-exercise-note">${notes.replace(/</g, '&lt;')}</div>` : ''}
         `;
       };
 
@@ -1403,11 +1554,13 @@ async function loadTemplateExercises(templateId, container) {
         const newName = nameInput.value.trim();
         const newSets = parseInt(setsInput.value) || ex.target_sets;
         const newReps = repsInput.value.trim() || ex.target_reps;
-        if (!newName) { restoreDisplay(ex.exercise_name, ex.target_sets, ex.target_reps); return; }
+        const newNote = noteInput.value.trim();
+        if (!newName) { restoreDisplay(ex.exercise_name, ex.target_sets, ex.target_reps, ex.notes); return; }
 
         const updates = {};
         if (newSets !== ex.target_sets) updates.target_sets = newSets;
         if (newReps !== ex.target_reps) updates.target_reps = newReps;
+        if (newNote !== (ex.notes || '')) updates.notes = newNote || null;
         if (newName !== ex.exercise_name) {
           const result = await api('/api/exercises', { method: 'POST', body: { name: newName } });
           updates.exercise_id = result.id;
@@ -1424,7 +1577,8 @@ async function loadTemplateExercises(templateId, container) {
         ex.exercise_name = newName;
         ex.target_sets = newSets;
         ex.target_reps = newReps;
-        restoreDisplay(newName, newSets, newReps);
+        ex.notes = newNote || null;
+        restoreDisplay(newName, newSets, newReps, ex.notes);
       };
 
       let saved = false;
@@ -1444,7 +1598,7 @@ async function loadTemplateExercises(templateId, container) {
         }, 150);
       };
 
-      [nameInput, setsInput, repsInput].forEach(input => {
+      [nameInput, setsInput, repsInput, noteInput].forEach(input => {
         input.addEventListener('blur', handleBlur);
         input.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') { saved = true; saveEdit(); }

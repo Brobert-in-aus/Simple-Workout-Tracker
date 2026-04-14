@@ -119,6 +119,20 @@ function initSchema() {
     db.exec("ALTER TABLE workout_sets ADD COLUMN is_amrap INTEGER NOT NULL DEFAULT 0");
   }
 
+  // Migration: add override_exercise_id to workout_exercises (for temporary exercise swaps)
+  try {
+    db.prepare("SELECT override_exercise_id FROM workout_exercises LIMIT 1").get();
+  } catch (e) {
+    db.exec("ALTER TABLE workout_exercises ADD COLUMN override_exercise_id INTEGER REFERENCES exercises(id)");
+  }
+
+  // Migration: add is_adhoc to day_exercises (for exercises added only to an active workout)
+  try {
+    db.prepare("SELECT is_adhoc FROM day_exercises LIMIT 1").get();
+  } catch (e) {
+    db.exec("ALTER TABLE day_exercises ADD COLUMN is_adhoc INTEGER NOT NULL DEFAULT 0");
+  }
+
   // Migration: populate schedule table from days if schedule is empty
   const scheduleCount = db.prepare("SELECT COUNT(*) as c FROM schedule").get().c;
   if (scheduleCount === 0) {
@@ -299,12 +313,13 @@ function addDayExercise(dayId, exerciseId, targetSets, targetReps, sortOrder, no
   return info.lastInsertRowid;
 }
 
-function getDayExercises(dayId) {
+function getDayExercises(dayId, includeAdhoc = false) {
+  const adhocFilter = includeAdhoc ? '' : 'AND de.is_adhoc = 0';
   return db.prepare(`
     SELECT de.*, e.name as exercise_name
     FROM day_exercises de
     JOIN exercises e ON e.id = de.exercise_id
-    WHERE de.day_id = ?
+    WHERE de.day_id = ? ${adhocFilter}
     ORDER BY de.sort_order
   `).all(dayId);
 }
@@ -362,10 +377,13 @@ function getWorkoutsForDate(date) {
 
 function getWorkoutFull(workoutId) {
   const exercises = db.prepare(`
-    SELECT we.*, de.exercise_id, de.target_sets, de.target_reps, de.superset_group, de.notes as default_note, de.is_warmup, de.is_duration, de.is_amrap, de.amrap_last_only, e.name as exercise_name
+    SELECT we.*, de.exercise_id, de.target_sets, de.target_reps, de.superset_group, de.notes as default_note, de.is_warmup, de.is_duration, de.is_amrap, de.amrap_last_only,
+           e.name as exercise_name,
+           oe.name as override_exercise_name
     FROM workout_exercises we
     JOIN day_exercises de ON de.id = we.day_exercise_id
     JOIN exercises e ON e.id = de.exercise_id
+    LEFT JOIN exercises oe ON oe.id = we.override_exercise_id
     WHERE we.workout_id = ?
     ORDER BY we.sort_order
   `).all(workoutId);
@@ -376,6 +394,15 @@ function getWorkoutFull(workoutId) {
     `).all(ex.id);
   }
   return exercises;
+}
+
+function swapWorkoutExercise(workoutExerciseId, exerciseName) {
+  if (!exerciseName) {
+    db.prepare('UPDATE workout_exercises SET override_exercise_id = NULL WHERE id = ?').run(workoutExerciseId);
+    return;
+  }
+  const exerciseId = getOrCreateExercise(exerciseName);
+  db.prepare('UPDATE workout_exercises SET override_exercise_id = ? WHERE id = ?').run(exerciseId, workoutExerciseId);
 }
 
 function getWorkoutForDate(date) {
@@ -496,6 +523,58 @@ function saveWorkoutExercise(workoutExerciseId, sets, note, skipped) {
     });
     txn();
   }
+}
+
+// Add an ad-hoc exercise to an active workout, inserting after a given sort_order position.
+// Always creates a day_exercise so the FK is satisfied; is_adhoc=1 hides it from the template editor.
+// If save_to_template=true, is_adhoc=0, so it appears in the template permanently.
+function addExerciseToWorkout(workoutId, exerciseName, targetSets, targetReps, afterSortOrder, saveToTemplate) {
+  const workout = db.prepare('SELECT * FROM workouts WHERE id = ?').get(workoutId);
+  if (!workout) throw new Error('Workout not found');
+
+  const exerciseId = getOrCreateExercise(exerciseName);
+  const isAdhoc = saveToTemplate ? 0 : 1;
+
+  // Determine sort_order for the new exercise (after the specified position)
+  const existing = db.prepare('SELECT id, sort_order FROM workout_exercises WHERE workout_id = ? ORDER BY sort_order').all(workoutId);
+  // afterSortOrder = null means "at the top" (insert before all); otherwise insert after that sort_order
+  const insertSortOrder = afterSortOrder != null ? afterSortOrder + 1 : 0;
+
+  const txn = db.transaction(() => {
+    // Shift sort_orders of exercises that come after the insertion point
+    db.prepare('UPDATE workout_exercises SET sort_order = sort_order + 1 WHERE workout_id = ? AND sort_order >= ?')
+      .run(workoutId, insertSortOrder);
+
+    // Create day_exercise in the template
+    const templateMaxSort = db.prepare('SELECT MAX(sort_order) as mx FROM day_exercises WHERE day_id = ?').get(workout.day_id);
+    const deSortOrder = (templateMaxSort && templateMaxSort.mx != null) ? templateMaxSort.mx + 1 : 0;
+    const deInfo = db.prepare(`
+      INSERT INTO day_exercises (day_id, exercise_id, target_sets, target_reps, sort_order, is_adhoc)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(workout.day_id, exerciseId, targetSets || 3, targetReps || '10', deSortOrder, isAdhoc);
+    const dayExerciseId = deInfo.lastInsertRowid;
+
+    // Create workout_exercise at the insertion sort_order
+    const weInfo = db.prepare(`
+      INSERT INTO workout_exercises (workout_id, day_exercise_id, sort_order, skipped, note)
+      VALUES (?, ?, ?, 0, NULL)
+    `).run(workoutId, dayExerciseId, insertSortOrder);
+    const workoutExerciseId = weInfo.lastInsertRowid;
+
+    // Create initial empty sets
+    const targetRepsNum = parseInt(targetReps) || null;
+    const insertWs = db.prepare(`
+      INSERT INTO workout_sets (workout_exercise_id, set_number, weight, reps, target_reps)
+      VALUES (?, ?, NULL, NULL, ?)
+    `);
+    for (let s = 1; s <= (targetSets || 3); s++) {
+      insertWs.run(workoutExerciseId, s, targetRepsNum);
+    }
+
+    return workoutExerciseId;
+  });
+
+  return txn();
 }
 
 function deleteWorkout(id) {
@@ -680,6 +759,8 @@ module.exports = {
   initWorkoutFromTemplate,
   getMostRecentWorkoutForDay,
   saveWorkoutExercise,
+  swapWorkoutExercise,
+  addExerciseToWorkout,
   deleteWorkout,
   reorderWorkoutExercises,
   // Exercise linking helpers

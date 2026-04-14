@@ -336,6 +336,15 @@ html, body {
   opacity: 0.8;
 }
 
+.template-note {
+  font-size: 0.82em;
+  color: var(--text-dim);
+  font-style: italic;
+  margin-bottom: 6px;
+  padding: 2px 4px;
+  border-left: 2px solid var(--border);
+}
+
 /* --- Set Row --- */
 .set-row {
   display: flex;
@@ -662,6 +671,13 @@ html, body {
 .template-exercise-detail {
   font-size: 12px;
   color: var(--text-dim);
+}
+
+.template-exercise-note {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-style: italic;
+  margin-top: 2px;
 }
 
 .template-exercise-actions {
@@ -1006,6 +1022,157 @@ html, body {
   color: white;
 }
 
+/* --- Swap / Alt exercise --- */
+.swap-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-left: 6px;
+}
+
+.swap-toggle:active {
+  background: var(--bg-input);
+}
+
+.swap-toggle.is-swapped {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.swap-badge {
+  display: inline-block;
+  font-size: 13px;
+  margin-left: 4px;
+  color: var(--accent);
+  vertical-align: middle;
+}
+
+.swap-panel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.swap-input {
+  flex: 1;
+  min-width: 160px;
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.swap-input:focus {
+  outline: none;
+}
+
+/* --- Add Exercise to Workout --- */
+.add-exercise-to-workout {
+  margin: 12px 0 4px;
+  text-align: center;
+}
+
+.add-ex-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.add-ex-name {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 6px 8px;
+  font-size: 14px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.add-ex-name:focus {
+  outline: none;
+}
+
+.add-ex-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.add-ex-sets {
+  width: 56px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 4px 6px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.add-ex-reps {
+  width: 56px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 4px 6px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.add-ex-after-label {
+  font-size: 13px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.add-ex-after {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 3px 6px;
+  font-size: 13px;
+  font-family: inherit;
+  flex: 1;
+}
+
+.add-ex-template-label {
+  font-size: 13px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.add-ex-actions {
+  display: flex;
+  gap: 8px;
+}
+
 /* --- Workout Section Header (multi-template per day) --- */
 .workout-section-header {
   font-size: 14px;
@@ -1214,7 +1381,8 @@ html, body {
   border-color: var(--accent);
 }
 
-.inline-edit-name {
+.inline-edit-name,
+.inline-edit-note {
   width: 100%;
 }
 
