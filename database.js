@@ -513,7 +513,7 @@ function reorderWorkoutExercises(workoutId, orderedIds) {
 // --- Exercise linking helpers ---
 
 function syncLinkedExercises(dayExerciseId, fields) {
-  const de = db.prepare('SELECT exercise_id, day_id FROM day_exercises WHERE id = ?').get(dayExerciseId);
+  const de = db.prepare('SELECT exercise_id, day_id, is_warmup FROM day_exercises WHERE id = ?').get(dayExerciseId);
   if (!de) return;
   const syncable = ['target_sets', 'target_reps', 'is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'notes'];
   const updates = [];
@@ -525,9 +525,10 @@ function syncLinkedExercises(dayExerciseId, fields) {
     }
   }
   if (updates.length === 0) return;
-  // Only sync across different templates — same-template duplicates are intentionally distinct
-  values.push(de.exercise_id, dayExerciseId, de.day_id);
-  db.prepare(`UPDATE day_exercises SET ${updates.join(', ')} WHERE exercise_id = ? AND id != ? AND day_id != ?`).run(...values);
+  // Only sync across different templates, matching by role (warmup↔warmup, main↔main)
+  // This prevents a warmup in one template from overwriting a main set in another
+  values.push(de.exercise_id, dayExerciseId, de.day_id, de.is_warmup);
+  db.prepare(`UPDATE day_exercises SET ${updates.join(', ')} WHERE exercise_id = ? AND id != ? AND day_id != ? AND is_warmup = ?`).run(...values);
 }
 
 function getTemplatesForExercise(exerciseId) {
@@ -541,17 +542,18 @@ function getTemplatesForExercise(exerciseId) {
 }
 
 function getLinkedInfoForTemplate(templateId) {
-  // Returns exercise_id -> list of other template names for all exercises in this template
-  const exercises = db.prepare('SELECT id, exercise_id FROM day_exercises WHERE day_id = ?').all(templateId);
+  // Returns day_exercise_id -> list of other template names for all exercises in this template
+  // Only matches by role (warmup↔warmup, main↔main) so links are accurate
+  const exercises = db.prepare('SELECT id, exercise_id, is_warmup FROM day_exercises WHERE day_id = ?').all(templateId);
   const result = {};
   for (const ex of exercises) {
     const others = db.prepare(`
       SELECT DISTINCT d.name
       FROM day_exercises de
       JOIN days d ON d.id = de.day_id
-      WHERE de.exercise_id = ? AND de.day_id != ?
+      WHERE de.exercise_id = ? AND de.day_id != ? AND de.is_warmup = ?
       ORDER BY d.name
-    `).all(ex.exercise_id, templateId);
+    `).all(ex.exercise_id, templateId, ex.is_warmup);
     if (others.length > 0) {
       result[ex.id] = others.map(o => o.name);
     }
@@ -559,7 +561,10 @@ function getLinkedInfoForTemplate(templateId) {
   return result;
 }
 
-function getMostRecentExerciseData(exerciseId, beforeDate) {
+function getMostRecentExerciseData(exerciseId, beforeDate, isWarmup) {
+  // Match by role (warmup↔warmup, main↔main) so prev data is relevant
+  const warmupFilter = isWarmup != null ? 'AND de.is_warmup = ?' : '';
+  const params = isWarmup != null ? [exerciseId, beforeDate, isWarmup] : [exerciseId, beforeDate];
   const row = db.prepare(`
     SELECT we.id as we_id, w.date, w.day_id, d.name as template_name,
            we.day_exercise_id, we.skipped, we.note, de.exercise_id
@@ -567,10 +572,10 @@ function getMostRecentExerciseData(exerciseId, beforeDate) {
     JOIN day_exercises de ON de.id = we.day_exercise_id
     JOIN workouts w ON w.id = we.workout_id
     JOIN days d ON d.id = w.day_id
-    WHERE de.exercise_id = ? AND w.date < ? AND we.skipped = 0
+    WHERE de.exercise_id = ? AND w.date < ? AND we.skipped = 0 ${warmupFilter}
     ORDER BY w.date DESC
     LIMIT 1
-  `).get(exerciseId, beforeDate);
+  `).get(...params);
   if (!row) return null;
   row.sets = db.prepare('SELECT * FROM workout_sets WHERE workout_exercise_id = ? ORDER BY set_number').all(row.we_id);
   return row;

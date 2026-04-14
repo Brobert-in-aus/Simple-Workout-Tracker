@@ -199,7 +199,7 @@ app.get('/api/workout/:date', (req, res) => {
     const prevData = [];
     for (const te of dayExercises) {
       const exerciseId = te.exercise_id;
-      const recent = db.getMostRecentExerciseData(exerciseId, date);
+      const recent = db.getMostRecentExerciseData(exerciseId, date, te.is_warmup);
       if (recent) {
         prevData.push({
           day_exercise_id: te.id,
@@ -293,7 +293,7 @@ app.post('/api/workout/:date/begin', (req, res) => {
   const dayExercises = db.getDayExercises(template_id);
   const prevData = [];
   for (const te of dayExercises) {
-    const recent = db.getMostRecentExerciseData(te.exercise_id, date);
+    const recent = db.getMostRecentExerciseData(te.exercise_id, date, te.is_warmup);
     if (recent) {
       prevData.push({
         day_exercise_id: te.id,
