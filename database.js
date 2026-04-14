@@ -142,20 +142,24 @@ function initSchema() {
   // Create new composite unique index (safe if already exists)
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_workouts_date_template ON workouts(date, day_id)");
 
-  // Migration: sync linked exercises (same exercise_id across templates)
-  // Pick the highest-id day_exercise as canonical and sync settings to all others
+  // Migration: sync linked exercises (same exercise_id across different templates)
+  // Pick the highest-id day_exercise as canonical and sync to others in DIFFERENT templates
+  // Same-template duplicates are intentionally distinct (e.g. warmup + main sets)
   db.exec("CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)");
   const migrated = db.prepare("SELECT 1 FROM _migrations WHERE name = 'sync_linked_exercises'").get();
   if (!migrated) {
     const groups = db.prepare(`
-      SELECT exercise_id FROM day_exercises GROUP BY exercise_id HAVING COUNT(*) > 1
+      SELECT exercise_id FROM day_exercises GROUP BY exercise_id HAVING COUNT(DISTINCT day_id) > 1
     `).all();
     const syncFields = ['target_sets', 'target_reps', 'is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'notes'];
     const txn = db.transaction(() => {
       for (const { exercise_id } of groups) {
+        // Group by template — pick one canonical per exercise across templates
         const all = db.prepare('SELECT * FROM day_exercises WHERE exercise_id = ? ORDER BY id DESC').all(exercise_id);
         const canonical = all[0];
         for (let i = 1; i < all.length; i++) {
+          // Only sync if in a different template
+          if (all[i].day_id === canonical.day_id) continue;
           const sets = [];
           const vals = [];
           for (const f of syncFields) {
@@ -509,7 +513,7 @@ function reorderWorkoutExercises(workoutId, orderedIds) {
 // --- Exercise linking helpers ---
 
 function syncLinkedExercises(dayExerciseId, fields) {
-  const de = db.prepare('SELECT exercise_id FROM day_exercises WHERE id = ?').get(dayExerciseId);
+  const de = db.prepare('SELECT exercise_id, day_id FROM day_exercises WHERE id = ?').get(dayExerciseId);
   if (!de) return;
   const syncable = ['target_sets', 'target_reps', 'is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'notes'];
   const updates = [];
@@ -521,8 +525,9 @@ function syncLinkedExercises(dayExerciseId, fields) {
     }
   }
   if (updates.length === 0) return;
-  values.push(de.exercise_id, dayExerciseId);
-  db.prepare(`UPDATE day_exercises SET ${updates.join(', ')} WHERE exercise_id = ? AND id != ?`).run(...values);
+  // Only sync across different templates — same-template duplicates are intentionally distinct
+  values.push(de.exercise_id, dayExerciseId, de.day_id);
+  db.prepare(`UPDATE day_exercises SET ${updates.join(', ')} WHERE exercise_id = ? AND id != ? AND day_id != ?`).run(...values);
 }
 
 function getTemplatesForExercise(exerciseId) {

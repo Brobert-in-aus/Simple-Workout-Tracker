@@ -80,7 +80,9 @@ app.post('/api/templates/:id/exercises', (req, res) => {
   const sortOrder = existing.length;
 
   // Check if this exercise exists in other templates — pre-fill from linked settings
-  const linked = db.getDb().prepare('SELECT * FROM day_exercises WHERE exercise_id = ? LIMIT 1').get(exerciseId);
+  // Exclude same-template entries so same-template duplicates stay independent
+  const templateId = parseInt(req.params.id);
+  const linked = db.getDb().prepare('SELECT * FROM day_exercises WHERE exercise_id = ? AND day_id != ? LIMIT 1').get(exerciseId, templateId);
   const sets = target_sets || (linked ? linked.target_sets : 3);
   const reps = target_reps || (linked ? linked.target_reps : '10');
   const warmup = is_warmup || (linked ? !!linked.is_warmup : false);
