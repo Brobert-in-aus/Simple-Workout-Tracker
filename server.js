@@ -317,6 +317,33 @@ app.post('/api/workout/:date/exercise/:workoutExerciseId', (req, res) => {
   res.json({ ok: true });
 });
 
+// Swap (or clear) the exercise for a workout entry
+app.put('/api/workout/:date/exercise/:workoutExerciseId/swap', (req, res) => {
+  const { exercise_name } = req.body;
+  db.swapWorkoutExercise(parseInt(req.params.workoutExerciseId), exercise_name || null);
+  res.json({ ok: true });
+});
+
+// Add an extra exercise to an active workout
+app.post('/api/workout/:date/add-exercise', (req, res) => {
+  const { workout_id, name, target_sets, target_reps, after_sort_order, save_to_template } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });
+  if (!workout_id) return res.status(400).json({ error: 'workout_id required' });
+  try {
+    const weId = db.addExerciseToWorkout(
+      parseInt(workout_id),
+      name.trim(),
+      parseInt(target_sets) || 3,
+      target_reps || '10',
+      after_sort_order != null ? parseInt(after_sort_order) : null,
+      !!save_to_template
+    );
+    res.json({ id: weId });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // Reorder exercises within a workout
 app.put('/api/workout/:date/reorder', (req, res) => {
   const workoutId = parseInt(req.body.workout_id);
