@@ -112,6 +112,9 @@ goto start
 echo.
 echo  Stopping server...
 taskkill /f /pid %PID% >nul 2>&1
+:: Snapshot package.json before pull to detect changes
+set "PKG_HASH_BEFORE="
+for /f "tokens=*" %%h in ('certutil -hashfile package.json MD5 2^>nul ^| findstr /v "hash MD5"') do set "PKG_HASH_BEFORE=%%h"
 echo  Pulling latest changes...
 echo.
 git pull
@@ -119,10 +122,17 @@ if errorlevel 1 (
     echo.
     echo  WARNING: git pull failed. Check your connection or resolve conflicts.
     echo  Restarting server with current code...
+    timeout /t 1 /nobreak >nul
+    goto start
 )
-echo.
-echo  Reinstalling dependencies...
-call "%NPM%" install --production 2>&1
+:: Check if package.json changed
+set "PKG_HASH_AFTER="
+for /f "tokens=*" %%h in ('certutil -hashfile package.json MD5 2^>nul ^| findstr /v "hash MD5"') do set "PKG_HASH_AFTER=%%h"
+if not "%PKG_HASH_BEFORE%"=="%PKG_HASH_AFTER%" (
+    echo.
+    echo  package.json changed — reinstalling dependencies...
+    call "%NPM%" install --production 2>&1
+)
 timeout /t 1 /nobreak >nul
 goto start
 
