@@ -115,25 +115,44 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
 {
   const workoutBtn = document.querySelector('.nav-btn[data-tab="workout"]');
   let lastTap = 0;
-  workoutBtn.addEventListener('click', () => {
-    const now = Date.now();
-    if (now - lastTap < 400) {
-      // Double-tap: scroll to the FIRST uncompleted exercise (stop at first hit, not last)
-      const cards = document.querySelectorAll('#exercises-list .exercise-card:not(.skipped):not(.preview-card)');
-      let target = null;
-      for (const card of cards) {
-        const checks = card.querySelectorAll('.set-check');
-        if (checks.length === 0) continue;
-        const allDone = Array.from(checks).every(c => c.classList.contains('done'));
-        if (!allDone) { target = card; break; }
-      }
-      if (target) {
-        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      } else {
-        // All exercises done — scroll to top
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }
+  let lastTouchEnd = 0; // used to suppress the click that always follows touchend on mobile
+
+  function doDoubleTapScroll() {
+    const cards = document.querySelectorAll('#exercises-list .exercise-card:not(.skipped):not(.preview-card)');
+    let target = null;
+    for (const card of cards) {
+      const checks = card.querySelectorAll('.set-check');
+      if (checks.length === 0) continue;
+      if (!Array.from(checks).every(c => c.classList.contains('done'))) { target = card; break; }
     }
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    // All active exercises done — scroll to next unstarted workout on same day, or to bottom
+    const beginDiv = document.querySelector('#exercises-list .begin-workout');
+    if (beginDiv) {
+      beginDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else {
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+    }
+  }
+
+  // touchend fires immediately with no tap delay — primary handler for iOS Safari.
+  // click can be delayed 300ms or swallowed entirely by double-tap-to-zoom detection.
+  workoutBtn.addEventListener('touchend', () => {
+    const now = Date.now();
+    lastTouchEnd = now;
+    if (now - lastTap < 500) doDoubleTapScroll();
+    lastTap = now;
+  }, { passive: true });
+
+  // click handles desktop / pointer devices (mouse, Apple Pencil).
+  // Skipped on mobile because touchend already ran and set lastTouchEnd within the past 600ms.
+  workoutBtn.addEventListener('click', () => {
+    if (Date.now() - lastTouchEnd < 600) return;
+    const now = Date.now();
+    if (now - lastTap < 500) doDoubleTapScroll();
     lastTap = now;
   });
 }

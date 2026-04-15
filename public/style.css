@@ -61,6 +61,7 @@ html, body {
   flex-direction: column;
   align-items: center;
   gap: 2px;
+  touch-action: manipulation; /* disable double-tap-to-zoom so both taps fire immediately */
 }
 
 .nav-btn.active {
