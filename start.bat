@@ -112,7 +112,7 @@ goto menu
 echo.
 call :log "--- Restart requested ---"
 echo  Stopping server...
-taskkill /pid %PID% >nul 2>&1
+call :stop_server
 set "WAIT_RETURN=restart_done" & set "WAIT_TICKS=0" & goto wait_for_exit
 :restart_done
 call :log "Server stopped."
@@ -122,7 +122,7 @@ goto start
 echo.
 call :log "=== UPDATE STARTED ==="
 echo  Stopping server...
-taskkill /pid %PID% >nul 2>&1
+call :stop_server
 set "WAIT_RETURN=update_stopped" & set "WAIT_TICKS=0" & goto wait_for_exit
 :update_stopped
 call :log "Server stopped. Running pre-update backup..."
@@ -170,7 +170,7 @@ goto start
 echo.
 call :log "--- Quit requested ---"
 echo  Stopping server...
-taskkill /pid %PID% >nul 2>&1
+call :stop_server
 set "WAIT_RETURN=quit_done" & set "WAIT_TICKS=0" & goto wait_for_exit
 :quit_done
 call :log "Server stopped. Exiting."
@@ -179,6 +179,11 @@ echo  Goodbye!
 timeout /t 1 /nobreak >nul
 exit
 
+:: --- Subroutine: ask server to shut down gracefully via HTTP, fall back to taskkill /f ---
+:stop_server
+"%NODE%" -e "require('http').request({host:'127.0.0.1',port:3000,path:'/api/shutdown',method:'POST'},function(r){r.resume()}).on('error',function(){}).end()" >nul 2>&1
+goto :eof
+
 :: --- Subroutine: wait for PID to exit, force-kill after 10s ---
 :: Caller sets WAIT_RETURN (label to goto on done) and WAIT_TICKS=0.
 :wait_for_exit
@@ -186,7 +191,7 @@ tasklist /fi "pid eq %PID%" 2>nul | find "%PID%" >nul 2>&1
 if errorlevel 1 goto %WAIT_RETURN%
 set /a WAIT_TICKS+=1
 if %WAIT_TICKS% GEQ 10 (
-    call :log "WARNING: Server did not exit cleanly after 10s - force killing (PID %PID%)."
+    call :log "WARNING: Server did not exit after 10s - force killing (PID %PID%)."
     echo  WARNING: Server did not exit cleanly - force killing...
     taskkill /f /pid %PID% >nul 2>&1
     timeout /t 1 /nobreak >nul

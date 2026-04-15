@@ -420,19 +420,31 @@ app.get('/api/history/exercise/:exerciseId', (req, res) => {
 
 // --- Graceful shutdown ---
 // Closes the DB (checkpoints the WAL) before exiting so the WAL doesn't accumulate
-// across restarts. taskkill without /f on Windows sends a polite termination that
-// triggers these handlers.
+// across restarts. Called via the /api/shutdown endpoint (used by start.bat) or
+// SIGINT (Ctrl+C in console). taskkill without /f cannot deliver signals to a
+// detached Windows process, so we use the HTTP endpoint as the primary mechanism.
 function shutdown() {
   db.closeDb();
   process.exit(0);
 }
-process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+
+// Shutdown endpoint — only accepts requests from localhost.
+// start.bat calls this via a node one-liner so the process exits cleanly,
+// checkpointing the WAL, before any backup or restart happens.
+app.post('/api/shutdown', (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress || '';
+  if (!ip.includes('127.0.0.1') && !ip.includes('::1')) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  res.json({ ok: true });
+  setTimeout(shutdown, 100); // let the response flush before exiting
+});
 
 // --- Start ---
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Workout Tracker running at http://0.0.0.0:${PORT}`);
+  console.log(`Workout Tracker running at http://0.0.0.0:${PORT} (graceful shutdown enabled)`);
   const os = require('os');
   const nets = os.networkInterfaces();
   for (const name of Object.keys(nets)) {
