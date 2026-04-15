@@ -75,6 +75,12 @@ function initSchema() {
       template_id INTEGER NOT NULL REFERENCES days(id) ON DELETE CASCADE,
       sort_order INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS body_weights (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL UNIQUE,
+      weight_kg REAL NOT NULL
+    );
   `);
 
   // --- Migrations ---
@@ -759,6 +765,23 @@ function getWorkoutsInRange(fromDate, toDate) {
   `).all(fromDate, toDate);
 }
 
+// --- Body weight helpers ---
+
+function logBodyWeight(date, weightKg) {
+  db.prepare(`
+    INSERT INTO body_weights (date, weight_kg) VALUES (?, ?)
+    ON CONFLICT(date) DO UPDATE SET weight_kg = excluded.weight_kg
+  `).run(date, weightKg);
+}
+
+function getBodyWeights() {
+  return db.prepare('SELECT date, weight_kg FROM body_weights ORDER BY date DESC').all();
+}
+
+function deleteBodyWeight(date) {
+  db.prepare('DELETE FROM body_weights WHERE date = ?').run(date);
+}
+
 function closeDb() {
   if (db) {
     db.close();
@@ -843,4 +866,8 @@ module.exports = {
   getAllWorkoutDates,
   getWorkoutDatesInRange,
   getWorkoutsInRange,
+  // Body weight helpers
+  logBodyWeight,
+  getBodyWeights,
+  deleteBodyWeight,
 };

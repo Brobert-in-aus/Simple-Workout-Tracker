@@ -418,6 +418,25 @@ app.get('/api/history/exercise/:exerciseId', (req, res) => {
   res.json(data);
 });
 
+// --- Body Weight API ---
+
+app.get('/api/body-weight', (req, res) => {
+  res.json(db.getBodyWeights());
+});
+
+app.put('/api/body-weight/:date', (req, res) => {
+  const { weight_kg } = req.body;
+  const val = parseFloat(weight_kg);
+  if (isNaN(val) || val <= 0) return res.status(400).json({ error: 'Valid weight_kg required' });
+  db.logBodyWeight(req.params.date, val);
+  res.json({ ok: true });
+});
+
+app.delete('/api/body-weight/:date', (req, res) => {
+  db.deleteBodyWeight(req.params.date);
+  res.json({ ok: true });
+});
+
 // --- Graceful shutdown ---
 // Closes the DB (checkpoints the WAL) before exiting so the WAL doesn't accumulate
 // across restarts. Called via the /api/shutdown endpoint (used by start.bat) or

@@ -107,26 +107,32 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
 
     if (btn.dataset.tab === 'history') loadHistory();
     if (btn.dataset.tab === 'template') loadTemplate();
+    if (btn.dataset.tab === 'body') loadBodyTab();
   });
 });
 
-// --- Double-tap Workout button to scroll to next uncompleted exercise ---
+// --- Double-tap Workout button to scroll to first uncompleted exercise ---
 {
   const workoutBtn = document.querySelector('.nav-btn[data-tab="workout"]');
   let lastTap = 0;
   workoutBtn.addEventListener('click', () => {
     const now = Date.now();
     if (now - lastTap < 400) {
-      // Double-tap: scroll to lowest uncompleted exercise if workout is active
+      // Double-tap: scroll to the FIRST uncompleted exercise (stop at first hit, not last)
       const cards = document.querySelectorAll('#exercises-list .exercise-card:not(.skipped):not(.preview-card)');
       let target = null;
       for (const card of cards) {
         const checks = card.querySelectorAll('.set-check');
         if (checks.length === 0) continue;
         const allDone = Array.from(checks).every(c => c.classList.contains('done'));
-        if (!allDone) target = card;
+        if (!allDone) { target = card; break; }
       }
-      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else {
+        // All exercises done — scroll to top
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
     }
     lastTap = now;
   });
@@ -536,6 +542,7 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
 
   // Track previous weight values for auto-match bulk update
   card.querySelectorAll('.weight-input').forEach(input => {
+    attachFirstTapCursorEnd(input);
     input.addEventListener('focus', () => {
       input.dataset.prevWeight = input.value;
       moveCursorToEnd(input);
@@ -548,6 +555,7 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
   });
 
   card.querySelectorAll('.set-input:not(.weight-input)').forEach(input => {
+    attachFirstTapCursorEnd(input);
     input.addEventListener('focus', () => moveCursorToEnd(input));
     input.addEventListener('change', () => debounceSave(ex));
     input.addEventListener('input', () => debounceSave(ex));
@@ -771,6 +779,19 @@ function moveCursorToEnd(input) {
   input.type = 'text';
   input.setSelectionRange(input.value.length, input.value.length);
   input.type = t;
+}
+
+// On mobile Safari, the focus handler fires too late — the browser places the caret where
+// the user tapped AFTER focus. Intercepting pointerdown on the first tap (before focus)
+// lets us block native caret placement and position it ourselves.
+function attachFirstTapCursorEnd(input) {
+  input.addEventListener('pointerdown', (e) => {
+    if (document.activeElement !== input) {
+      e.preventDefault();
+      input.focus();
+      requestAnimationFrame(() => moveCursorToEnd(input));
+    }
+  }, { passive: false });
 }
 
 function autoMatchWeights(changedInput, card) {
@@ -1866,6 +1887,195 @@ async function loadTemplateExercises(templateId, container) {
       loadTemplate();
       loadWeek();
     }
+  });
+}
+
+// --- Body Tab ---
+
+let bodyWeightsCache = null;
+
+function invalidateBodyCache() {
+  bodyWeightsCache = null;
+}
+
+async function fetchBodyWeights() {
+  if (!bodyWeightsCache) bodyWeightsCache = await api('/api/body-weight');
+  return bodyWeightsCache;
+}
+
+async function saveBodyWeight(date, weightKg) {
+  await api(`/api/body-weight/${date}`, { method: 'PUT', body: { weight_kg: weightKg } });
+  invalidateBodyCache();
+}
+
+async function loadBodyTab() {
+  const readings = await fetchBodyWeights();
+  const todayReading = readings.find(r => r.date === todayStr()) || null;
+  renderBodyToday(document.getElementById('body-today-section'), todayReading, readings);
+  renderBodySparkline(document.getElementById('body-sparkline-section'), readings);
+  renderBodyHistory(document.getElementById('body-history-list'), readings);
+}
+
+function renderBodyToday(container, todayReading, allReadings) {
+  const today = todayStr();
+  const val = todayReading ? todayReading.weight_kg : '';
+  const prev = allReadings.find(r => r.date < today);
+  const hint = prev
+    ? `Previous: ${prev.weight_kg} kg &mdash; ${formatDate(prev.date)}`
+    : 'Enter your weight to start tracking';
+
+  container.innerHTML = `
+    <div class="body-today-card">
+      <div class="body-today-label">${formatDate(today)}</div>
+      <div class="body-today-input-row">
+        <input type="number" class="body-today-input" value="${val}"
+               placeholder="&ndash;" step="0.1" inputmode="decimal" min="20" max="400">
+        <span class="body-today-unit">kg</span>
+      </div>
+      <div class="body-today-hint">${hint}</div>
+    </div>
+  `;
+
+  const input = container.querySelector('.body-today-input');
+  attachFirstTapCursorEnd(input);
+
+  let timer = null;
+  const doSave = async () => {
+    const v = parseFloat(input.value);
+    if (isNaN(v) || v <= 0) return;
+    await saveBodyWeight(today, v);
+    const fresh = await fetchBodyWeights();
+    renderBodySparkline(document.getElementById('body-sparkline-section'), fresh);
+    renderBodyHistory(document.getElementById('body-history-list'), fresh);
+    // Update hint to reflect the just-saved value
+    const prev2 = fresh.find(r => r.date < today);
+    container.querySelector('.body-today-hint').innerHTML = prev2
+      ? `Previous: ${prev2.weight_kg} kg &mdash; ${formatDate(prev2.date)}`
+      : 'Enter your weight to start tracking';
+  };
+
+  input.addEventListener('change', () => { clearTimeout(timer); timer = setTimeout(doSave, 600); });
+  input.addEventListener('blur',   () => { clearTimeout(timer); doSave(); });
+}
+
+function renderBodySparkline(container, readings) {
+  if (readings.length < 2) {
+    container.innerHTML = readings.length === 1
+      ? '<div class="body-sparkline-hint">Log a second reading to see the trend</div>'
+      : '';
+    return;
+  }
+
+  // Oldest first for left-to-right display
+  const points = [...readings].reverse();
+
+  const W = 300, H = 68;
+  const pt = 10, pb = 18, pl = 36, pr = 4;
+  const plotW = W - pl - pr, plotH = H - pt - pb;
+
+  const weights = points.map(p => p.weight_kg);
+  const minW = Math.min(...weights);
+  const maxW = Math.max(...weights);
+  const range = maxW - minW || 1;
+
+  const n = points.length;
+  const toX = i => pl + (n > 1 ? i / (n - 1) : 0.5) * plotW;
+  const toY = w => pt + (1 - (w - minW) / range) * plotH;
+
+  const polyPts = points.map((p, i) =>
+    `${toX(i).toFixed(1)},${toY(p.weight_kg).toFixed(1)}`
+  ).join(' ');
+
+  const today = todayStr();
+  const dots = points.map((p, i) => {
+    const isToday = p.date === today;
+    const r = isToday ? 4 : 2.5;
+    return `<circle cx="${toX(i).toFixed(1)}" cy="${toY(p.weight_kg).toFixed(1)}" r="${r}"
+      class="sparkline-dot${isToday ? ' sparkline-dot-today' : ''}"/>`;
+  }).join('');
+
+  const firstDate = formatDateShort(points[0].date);
+  const lastDate  = formatDateShort(points[points.length - 1].date);
+
+  container.innerHTML = `
+    <div class="body-sparkline-card">
+      <svg class="body-sparkline-svg" viewBox="0 0 ${W} ${H}"
+           preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+        <text x="${pl - 3}" y="${(pt + 4).toFixed(1)}"
+              class="sparkline-label" text-anchor="end">${maxW}</text>
+        <text x="${pl - 3}" y="${(pt + plotH + 4).toFixed(1)}"
+              class="sparkline-label" text-anchor="end">${minW}</text>
+        <text x="${pl}" y="${H}"
+              class="sparkline-label" text-anchor="start">${firstDate}</text>
+        <text x="${W - pr}" y="${H}"
+              class="sparkline-label" text-anchor="end">${lastDate}</text>
+        <polyline points="${polyPts}" class="sparkline-line" fill="none"
+                  stroke-linejoin="round" stroke-linecap="round"/>
+        ${dots}
+      </svg>
+    </div>
+  `;
+}
+
+function renderBodyHistory(container, readings) {
+  if (readings.length === 0) {
+    container.innerHTML = '<div class="empty-state">No readings yet</div>';
+    return;
+  }
+
+  // Group by week (identical logic to loadHistory)
+  const weeks = {};
+  for (const r of readings) {
+    const d = new Date(r.date + 'T00:00:00');
+    const mon = new Date(d);
+    const jsDay = mon.getDay();
+    mon.setDate(mon.getDate() + (jsDay === 0 ? -6 : 1 - jsDay));
+    const weekKey = toISO(mon);
+    if (!weeks[weekKey]) weeks[weekKey] = [];
+    weeks[weekKey].push(r);
+  }
+
+  let html = '';
+  for (const [weekStart, wReadings] of Object.entries(weeks)) {
+    html += `<div class="history-week">`;
+    html += `<div class="history-week-header">Week of ${formatDate(weekStart)}</div>`;
+    for (const r of wReadings) {
+      html += `
+        <div class="body-history-item">
+          <span class="body-history-date">${formatDate(r.date)}</span>
+          <span class="body-history-weight">
+            <input type="number" class="body-history-input"
+                   value="${r.weight_kg}" step="0.1" inputmode="decimal"
+                   data-date="${r.date}" data-original="${r.weight_kg}"
+                   min="20" max="400">
+            <span class="body-history-unit">kg</span>
+          </span>
+        </div>
+      `;
+    }
+    html += '</div>';
+  }
+  container.innerHTML = html;
+
+  container.querySelectorAll('.body-history-input').forEach(input => {
+    attachFirstTapCursorEnd(input);
+    const date = input.dataset.date;
+    let timer = null;
+    const doSave = async () => {
+      const v = parseFloat(input.value);
+      if (isNaN(v) || v <= 0) { input.value = input.dataset.original; return; }
+      await saveBodyWeight(date, v);
+      input.dataset.original = String(v);
+      const fresh = await fetchBodyWeights();
+      renderBodySparkline(document.getElementById('body-sparkline-section'), fresh);
+      // If this date is today, sync the today widget's input too
+      if (date === todayStr()) {
+        const todayInput = document.querySelector('#body-today-section .body-today-input');
+        if (todayInput) todayInput.value = v;
+      }
+    };
+    input.addEventListener('change', () => { clearTimeout(timer); timer = setTimeout(doSave, 600); });
+    input.addEventListener('blur',   () => { clearTimeout(timer); doSave(); });
   });
 }
 
