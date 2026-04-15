@@ -105,18 +105,16 @@ goto menu
 echo.
 echo  Stopping server...
 taskkill /pid %PID% >nul 2>&1
-:restart_wait
-tasklist /fi "pid eq %PID%" 2>nul | find "%PID%" >nul 2>&1
-if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto restart_wait)
+set "WAIT_RETURN=restart_done" & set "WAIT_TICKS=0" & goto wait_for_exit
+:restart_done
 goto start
 
 :update
 echo.
 echo  Stopping server...
 taskkill /pid %PID% >nul 2>&1
-:update_wait
-tasklist /fi "pid eq %PID%" 2>nul | find "%PID%" >nul 2>&1
-if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto update_wait)
+set "WAIT_RETURN=update_done" & set "WAIT_TICKS=0" & goto wait_for_exit
+:update_done
 echo  Backing up database...
 "%NODE%" "%~dp0backup.js" pre-update
 :: Snapshot package.json before pull to detect changes
@@ -147,10 +145,24 @@ goto start
 echo.
 echo  Stopping server...
 taskkill /pid %PID% >nul 2>&1
-:quit_wait
-tasklist /fi "pid eq %PID%" 2>nul | find "%PID%" >nul 2>&1
-if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto quit_wait)
+set "WAIT_RETURN=quit_done" & set "WAIT_TICKS=0" & goto wait_for_exit
+:quit_done
 del "%LOGFILE%" >nul 2>&1
 echo  Goodbye!
 timeout /t 1 /nobreak >nul
 exit
+
+:: --- Subroutine: wait for PID to exit, force-kill after 10s ---
+:: Caller sets WAIT_RETURN (label to goto on done) and WAIT_TICKS=0.
+:wait_for_exit
+tasklist /fi "pid eq %PID%" 2>nul | find "%PID%" >nul 2>&1
+if errorlevel 1 goto %WAIT_RETURN%
+set /a WAIT_TICKS+=1
+if %WAIT_TICKS% GEQ 10 (
+    echo  WARNING: Server did not exit cleanly - force killing...
+    taskkill /f /pid %PID% >nul 2>&1
+    timeout /t 1 /nobreak >nul
+    goto %WAIT_RETURN%
+)
+timeout /t 1 /nobreak >nul
+goto wait_for_exit
