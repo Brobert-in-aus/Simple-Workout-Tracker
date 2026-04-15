@@ -10,8 +10,10 @@ color 0B
 cd /d "%~dp0"
 
 :: --- Log file (persistent, appended across sessions) ---
-set "LOG=%~dp0data\server-log.txt"
-if not exist "%~dp0data" mkdir "%~dp0data"
+:: Use relative path — cd /d "%~dp0" above guarantees we're in the script directory.
+:: mkdir 2>nul is idempotent (suppresses "already exists" error).
+set "LOG=data\server-log.txt"
+mkdir data 2>nul
 
 :: --- Find Node.js (portable first, then system) ---
 
@@ -202,6 +204,7 @@ goto wait_for_exit
 
 :: --- Subroutine: append timestamped message to log ---
 :log
-echo [%date% %time:~0,8%] %~1 >> "%LOG%"
+mkdir data 2>nul
+echo [%date% %time:~0,8%] %~1 >> "%LOG%" 2>nul
 echo  %~1
 goto :eof
