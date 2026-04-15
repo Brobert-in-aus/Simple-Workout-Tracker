@@ -112,6 +112,9 @@ goto start
 echo.
 echo  Stopping server...
 taskkill /f /pid %PID% >nul 2>&1
+timeout /t 1 /nobreak >nul
+echo  Backing up database...
+"%NODE%" "%~dp0backup.js" pre-update
 :: Snapshot package.json before pull to detect changes
 set "PKG_HASH_BEFORE="
 for /f "tokens=*" %%h in ('certutil -hashfile package.json MD5 2^>nul ^| findstr /v "hash MD5"') do set "PKG_HASH_BEFORE=%%h"
