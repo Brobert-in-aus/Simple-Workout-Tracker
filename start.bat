@@ -104,15 +104,15 @@ goto menu
 :restart
 echo.
 echo  Stopping server...
-taskkill /f /pid %PID% >nul 2>&1
-timeout /t 1 /nobreak >nul
+taskkill /pid %PID% >nul 2>&1
+timeout /t 2 /nobreak >nul
 goto start
 
 :update
 echo.
 echo  Stopping server...
-taskkill /f /pid %PID% >nul 2>&1
-timeout /t 1 /nobreak >nul
+taskkill /pid %PID% >nul 2>&1
+timeout /t 2 /nobreak >nul
 echo  Backing up database...
 "%NODE%" "%~dp0backup.js" pre-update
 :: Snapshot package.json before pull to detect changes
@@ -142,7 +142,8 @@ goto start
 :quit
 echo.
 echo  Stopping server...
-taskkill /f /pid %PID% >nul 2>&1
+taskkill /pid %PID% >nul 2>&1
+timeout /t 2 /nobreak >nul
 del "%LOGFILE%" >nul 2>&1
 echo  Goodbye!
 timeout /t 1 /nobreak >nul

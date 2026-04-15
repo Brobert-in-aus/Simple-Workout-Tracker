@@ -418,6 +418,17 @@ app.get('/api/history/exercise/:exerciseId', (req, res) => {
   res.json(data);
 });
 
+// --- Graceful shutdown ---
+// Closes the DB (checkpoints the WAL) before exiting so the WAL doesn't accumulate
+// across restarts. taskkill without /f on Windows sends a polite termination that
+// triggers these handlers.
+function shutdown() {
+  db.closeDb();
+  process.exit(0);
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
 // --- Start ---
 
 app.listen(PORT, '0.0.0.0', () => {
