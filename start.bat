@@ -105,14 +105,18 @@ goto menu
 echo.
 echo  Stopping server...
 taskkill /pid %PID% >nul 2>&1
-timeout /t 2 /nobreak >nul
+:restart_wait
+tasklist /fi "pid eq %PID%" 2>nul | find "%PID%" >nul 2>&1
+if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto restart_wait)
 goto start
 
 :update
 echo.
 echo  Stopping server...
 taskkill /pid %PID% >nul 2>&1
-timeout /t 2 /nobreak >nul
+:update_wait
+tasklist /fi "pid eq %PID%" 2>nul | find "%PID%" >nul 2>&1
+if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto update_wait)
 echo  Backing up database...
 "%NODE%" "%~dp0backup.js" pre-update
 :: Snapshot package.json before pull to detect changes
@@ -143,7 +147,9 @@ goto start
 echo.
 echo  Stopping server...
 taskkill /pid %PID% >nul 2>&1
-timeout /t 2 /nobreak >nul
+:quit_wait
+tasklist /fi "pid eq %PID%" 2>nul | find "%PID%" >nul 2>&1
+if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto quit_wait)
 del "%LOGFILE%" >nul 2>&1
 echo  Goodbye!
 timeout /t 1 /nobreak >nul
