@@ -9,6 +9,10 @@ color 0B
 
 cd /d "%~dp0"
 
+:: --- Log file (persistent, appended across sessions) ---
+set "LOG=%~dp0data\server-log.txt"
+if not exist "%~dp0data" mkdir "%~dp0data"
+
 :: --- Find Node.js (portable first, then system) ---
 
 set "NODE="
@@ -93,6 +97,9 @@ echo    [Q] Quit
 echo.
 echo ============================================
 
+call :log "=== SERVER STARTED (PID %PID%) ==="
+if exist "%LOGFILE%" type "%LOGFILE%" >> "%LOG%"
+
 :menu
 set "choice="
 set /p "choice=  > "
@@ -103,50 +110,70 @@ goto menu
 
 :restart
 echo.
+call :log "--- Restart requested ---"
 echo  Stopping server...
 taskkill /pid %PID% >nul 2>&1
 set "WAIT_RETURN=restart_done" & set "WAIT_TICKS=0" & goto wait_for_exit
 :restart_done
+call :log "Server stopped."
 goto start
 
 :update
 echo.
+call :log "=== UPDATE STARTED ==="
 echo  Stopping server...
 taskkill /pid %PID% >nul 2>&1
-set "WAIT_RETURN=update_done" & set "WAIT_TICKS=0" & goto wait_for_exit
-:update_done
+set "WAIT_RETURN=update_stopped" & set "WAIT_TICKS=0" & goto wait_for_exit
+:update_stopped
+call :log "Server stopped. Running pre-update backup..."
 echo  Backing up database...
-"%NODE%" "%~dp0backup.js" pre-update
+"%NODE%" "%~dp0backup.js" pre-update > "%TEMP%\wt-backup.tmp" 2>&1
+type "%TEMP%\wt-backup.tmp"
+type "%TEMP%\wt-backup.tmp" >> "%LOG%"
+del "%TEMP%\wt-backup.tmp" >nul 2>&1
 :: Snapshot package.json before pull to detect changes
 set "PKG_HASH_BEFORE="
 for /f "tokens=*" %%h in ('certutil -hashfile package.json MD5 2^>nul ^| findstr /v "hash MD5"') do set "PKG_HASH_BEFORE=%%h"
+call :log "Running git pull..."
 echo  Pulling latest changes...
 echo.
-git pull
+git pull > "%TEMP%\wt-gitpull.tmp" 2>&1
+type "%TEMP%\wt-gitpull.tmp"
+type "%TEMP%\wt-gitpull.tmp" >> "%LOG%"
+del "%TEMP%\wt-gitpull.tmp" >nul 2>&1
 if errorlevel 1 (
+    call :log "ERROR: git pull failed (exit code %ERRORLEVEL%). Restarting with current code."
     echo.
     echo  WARNING: git pull failed. Check your connection or resolve conflicts.
     echo  Restarting server with current code...
     timeout /t 1 /nobreak >nul
     goto start
 )
+call :log "git pull succeeded."
 :: Check if package.json changed
 set "PKG_HASH_AFTER="
 for /f "tokens=*" %%h in ('certutil -hashfile package.json MD5 2^>nul ^| findstr /v "hash MD5"') do set "PKG_HASH_AFTER=%%h"
 if not "%PKG_HASH_BEFORE%"=="%PKG_HASH_AFTER%" (
+    call :log "package.json changed - reinstalling dependencies..."
     echo.
-    echo  package.json changed — reinstalling dependencies...
-    call "%NPM%" install --production 2>&1
+    echo  package.json changed - reinstalling dependencies...
+    call "%NPM%" install --production > "%TEMP%\wt-npm.tmp" 2>&1
+    type "%TEMP%\wt-npm.tmp"
+    type "%TEMP%\wt-npm.tmp" >> "%LOG%"
+    del "%TEMP%\wt-npm.tmp" >nul 2>&1
 )
+call :log "=== UPDATE COMPLETE ==="
 timeout /t 1 /nobreak >nul
 goto start
 
 :quit
 echo.
+call :log "--- Quit requested ---"
 echo  Stopping server...
 taskkill /pid %PID% >nul 2>&1
 set "WAIT_RETURN=quit_done" & set "WAIT_TICKS=0" & goto wait_for_exit
 :quit_done
+call :log "Server stopped. Exiting."
 del "%LOGFILE%" >nul 2>&1
 echo  Goodbye!
 timeout /t 1 /nobreak >nul
@@ -159,6 +186,7 @@ tasklist /fi "pid eq %PID%" 2>nul | find "%PID%" >nul 2>&1
 if errorlevel 1 goto %WAIT_RETURN%
 set /a WAIT_TICKS+=1
 if %WAIT_TICKS% GEQ 10 (
+    call :log "WARNING: Server did not exit cleanly after 10s - force killing (PID %PID%)."
     echo  WARNING: Server did not exit cleanly - force killing...
     taskkill /f /pid %PID% >nul 2>&1
     timeout /t 1 /nobreak >nul
@@ -166,3 +194,9 @@ if %WAIT_TICKS% GEQ 10 (
 )
 timeout /t 1 /nobreak >nul
 goto wait_for_exit
+
+:: --- Subroutine: append timestamped message to log ---
+:log
+echo [%date% %time:~0,8%] %~1 >> "%LOG%"
+echo  %~1
+goto :eof
