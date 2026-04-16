@@ -765,6 +765,71 @@ function getWorkoutsInRange(fromDate, toDate) {
   `).all(fromDate, toDate);
 }
 
+// --- Trend / Progress helpers ---
+
+function getPerformedExercises() {
+  // All exercises that have at least one completed set, excluding warmups
+  return db.prepare(`
+    SELECT DISTINCT e.id, e.name
+    FROM exercises e
+    JOIN day_exercises de ON de.exercise_id = e.id AND de.is_warmup = 0
+    JOIN workout_exercises we ON we.day_exercise_id = de.id AND we.skipped = 0
+    JOIN workout_sets ws ON ws.workout_exercise_id = we.id AND ws.completed = 1
+    ORDER BY e.name
+  `).all();
+}
+
+function getExerciseTrend(exerciseId) {
+  // Returns [{date, total_volume, completion_pct}] sorted ASC, excluding warmup sets.
+  // total_volume = SUM(weight * reps) for completed sets that have both values.
+  // completion_pct = per-set avg where AMRAP=100%, others = min(reps/target,1)*100.
+  const rows = db.prepare(`
+    SELECT w.date,
+           ws.weight, ws.reps, ws.target_reps, ws.is_amrap, ws.completed
+    FROM workout_exercises we
+    JOIN workouts w ON w.id = we.workout_id
+    JOIN day_exercises de ON de.id = we.day_exercise_id
+    JOIN workout_sets ws ON ws.workout_exercise_id = we.id
+    WHERE de.exercise_id = ? AND de.is_warmup = 0 AND we.skipped = 0
+    ORDER BY w.date ASC, ws.set_number ASC
+  `).all(exerciseId);
+
+  const dateMap = new Map();
+  for (const row of rows) {
+    if (!dateMap.has(row.date)) dateMap.set(row.date, []);
+    dateMap.get(row.date).push(row);
+  }
+
+  const result = [];
+  for (const [date, sets] of dateMap) {
+    const completedSets = sets.filter(s => s.completed);
+    if (completedSets.length === 0) continue;
+
+    // Volume: only sets with both weight and reps
+    const totalVolume = completedSets.reduce((sum, s) => {
+      if (s.weight == null || s.reps == null) return sum;
+      return sum + s.weight * s.reps;
+    }, 0);
+
+    // Completion: all scheduled sets (completed or not) as denominator
+    const totalSets = sets.length;
+    const completionSum = sets.reduce((sum, s) => {
+      if (s.is_amrap) return sum + 1;
+      if (!s.completed || s.reps == null) return sum + 0;
+      if (s.target_reps == null || s.target_reps === 0) return sum + 1;
+      return sum + Math.min(s.reps / s.target_reps, 1);
+    }, 0);
+    const completionPct = Math.round(completionSum / totalSets * 100);
+
+    result.push({ date, total_volume: Math.round(totalVolume), completion_pct: completionPct });
+  }
+  return result;
+}
+
+function getAllWorkoutDatesDistinct() {
+  return db.prepare('SELECT DISTINCT date FROM workouts ORDER BY date ASC').all().map(r => r.date);
+}
+
 // --- Body weight helpers ---
 
 function logBodyWeight(date, weightKg) {
@@ -870,4 +935,8 @@ module.exports = {
   logBodyWeight,
   getBodyWeights,
   deleteBodyWeight,
+  // Trend / Progress helpers
+  getPerformedExercises,
+  getExerciseTrend,
+  getAllWorkoutDatesDistinct,
 };
