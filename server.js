@@ -437,6 +437,20 @@ app.delete('/api/body-weight/:date', (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Progress / Trend API ---
+
+app.get('/api/exercises/performed', (req, res) => {
+  res.json(db.getPerformedExercises());
+});
+
+app.get('/api/trends/exercise/:id', (req, res) => {
+  res.json(db.getExerciseTrend(parseInt(req.params.id)));
+});
+
+app.get('/api/trends/frequency', (req, res) => {
+  res.json(db.getAllWorkoutDatesDistinct());
+});
+
 // --- Graceful shutdown ---
 // Closes the DB (checkpoints the WAL) before exiting so the WAL doesn't accumulate
 // across restarts. Called via the /api/shutdown endpoint (used by start.bat) or

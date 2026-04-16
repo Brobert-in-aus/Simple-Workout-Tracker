@@ -1604,3 +1604,273 @@ html, body {
   font-size: 12px;
   color: var(--text-dim);
 }
+
+/* =====================================================
+   Progress Tab
+   ===================================================== */
+
+.progress-shell {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 80px; /* clear bottom nav */
+}
+
+/* Segment control */
+.progress-segments {
+  display: flex;
+  gap: 0;
+  margin: 12px 12px 0;
+  background: var(--border);
+  border-radius: 10px;
+  padding: 2px;
+}
+
+.seg-btn {
+  flex: 1;
+  padding: 8px 0;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  touch-action: manipulation;
+}
+
+.seg-btn.active {
+  background: var(--bg-card);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+}
+
+/* Range buttons */
+.progress-range-row {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px 4px;
+  justify-content: center;
+}
+
+.range-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--bg-card);
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.range-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* Content area */
+.progress-content {
+  flex: 1;
+  padding: 8px 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.progress-loading {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 14px;
+  padding: 24px 0;
+}
+
+/* Chart cards */
+.progress-chart-card {
+  background: var(--bg-card);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  padding: 12px;
+}
+
+.progress-chart-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.chart-title-unit {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+.progress-chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+/* Chart elements */
+.chart-line {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.chart-line-secondary {
+  stroke: var(--olive);
+  stroke-width: 2;
+}
+
+.chart-dot {
+  fill: var(--accent);
+}
+
+.chart-bar {
+  fill: var(--accent);
+  opacity: 0.8;
+}
+
+.chart-label {
+  fill: var(--text-dim);
+  font-size: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.chart-empty {
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-dim);
+  padding: 20px 0 8px;
+}
+
+/* Exercise picker */
+.exercise-picker-card {
+  background: var(--bg-card);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  padding: 10px 12px;
+  position: relative;
+}
+
+.exercise-search-input {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  font-size: 15px;
+  color: var(--text);
+  padding: 4px 0 6px;
+  outline: none;
+}
+
+.exercise-search-input:focus {
+  border-bottom-color: var(--accent);
+}
+
+.exercise-search-results {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  z-index: 20;
+  max-height: 220px;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.10);
+}
+
+.exercise-result-item {
+  padding: 11px 14px;
+  font-size: 14px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.exercise-result-item:last-child {
+  border-bottom: none;
+}
+
+.exercise-result-item:active {
+  background: var(--bg-input);
+}
+
+.strength-chart-area {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Workouts stats */
+.progress-stats-row {
+  display: flex;
+  gap: 10px;
+}
+
+.progress-stat-card {
+  flex: 1;
+  background: var(--bg-card);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  padding: 14px 12px;
+  text-align: center;
+}
+
+.progress-stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.progress-stat-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+/* Body history (collapsible) */
+.progress-history-section {
+  background: var(--bg-card);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.progress-history-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.toggle-arrow {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.progress-history-list {
+  border-top: 1px solid var(--border);
+}
+
+.progress-history-list.hidden {
+  display: none;
+}
