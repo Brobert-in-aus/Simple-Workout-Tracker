@@ -77,6 +77,14 @@ for /f "tokens=2" %%a in ('tasklist /fi "imagename eq node.exe" /fo list ^| find
 echo  Server running (PID: %PID%)
 echo.
 if exist "%LOGFILE%" type "%LOGFILE%"
+set "LATEST_BACKUP=No weekly backup yet"
+set "LATEST_BACKUP_FILE="
+for /f "delims=" %%f in ('dir /b /a-d /o-d "data\backups\workouts-*.db" 2^>nul') do (
+    if not defined LATEST_BACKUP_FILE set "LATEST_BACKUP_FILE=%%f"
+)
+if defined LATEST_BACKUP_FILE (
+    set "LATEST_BACKUP=%LATEST_BACKUP_FILE%"
+)
 echo.
 echo ============================================
 echo.
@@ -89,6 +97,8 @@ for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do (
         echo    LAN:    http://%%b:3000
     )
 )
+echo.
+echo  Latest weekly backup: %LATEST_BACKUP%
 echo.
 echo ============================================
 echo.

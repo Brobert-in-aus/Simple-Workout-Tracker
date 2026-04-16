@@ -1687,6 +1687,7 @@ html, body {
 /* Range buttons */
 .progress-range-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 10px 12px 4px;
   justify-content: center;
@@ -1711,6 +1712,23 @@ html, body {
   border-color: var(--accent);
 }
 
+.progress-export-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.progress-export-btn:active {
+  background: var(--bg-input);
+}
+
 /* Content area */
 .progress-content {
   flex: 1;
@@ -1733,6 +1751,14 @@ html, body {
   border-radius: 12px;
   border: 1px solid var(--border);
   padding: 12px;
+}
+
+.progress-chart-expandable {
+  cursor: pointer;
+}
+
+.progress-chart-expandable:active {
+  background: var(--bg-input);
 }
 
 .progress-chart-title {
@@ -1769,6 +1795,10 @@ html, body {
   fill: var(--accent);
 }
 
+.chart-dot-measured {
+  fill: var(--accent);
+}
+
 .chart-bar {
   fill: var(--accent);
   opacity: 0.8;
@@ -1792,6 +1822,28 @@ html, body {
   font-size: 12px;
   color: var(--text-dim);
   line-height: 1.4;
+}
+
+.progress-info-card {
+  padding-top: 10px;
+}
+
+.progress-info-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.chart-modal-view .progress-chart-svg {
+  width: 100%;
+}
+
+.chart-modal-copy {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.5;
 }
 
 .chart-subtitle {

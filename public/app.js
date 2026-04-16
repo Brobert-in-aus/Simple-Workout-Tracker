@@ -5,6 +5,7 @@ let currentWorkoutBlocks = []; // array of {workout, previous} per template
 let saveTimers = {};
 let scheduleCache = null;
 let templatesCache = null;
+let backupStatusCache = null;
 
 // --- Helpers ---
 function todayStr() {
@@ -142,6 +143,11 @@ async function getTemplates() {
 
 function invalidateTemplatesCache() {
   templatesCache = null;
+}
+
+async function getBackupStatus() {
+  if (!backupStatusCache) backupStatusCache = await api('/api/backup/status');
+  return backupStatusCache;
 }
 
 function isWarmupExercise(ex, prev) {
@@ -2065,42 +2071,6 @@ function countWeeksInRange(start, end) {
   return Math.max(1, Math.ceil((diffMs + 1) / (7 * 24 * 60 * 60 * 1000)));
 }
 
-function getEffectiveWeightForDate(readingsAsc, date) {
-  if (readingsAsc.length === 0) return null;
-
-  let effective = readingsAsc[0].weight_kg;
-  for (const reading of readingsAsc) {
-    if (reading.date > date) break;
-    effective = reading.weight_kg;
-  }
-
-  return effective;
-}
-
-async function getBodyTrendSeries(range) {
-  if (!bodyWeightsCache) bodyWeightsCache = await api('/api/body-weight');
-  const readings = bodyWeightsCache;
-  if (readings.length === 0) return [];
-
-  if (!workoutDatesCache) {
-    workoutDatesCache = await api('/api/trends/frequency');
-  }
-
-  const displayDates = [...new Set([
-    ...workoutDatesCache,
-    ...readings.map(r => r.date),
-    todayStr(),
-  ])].sort((a, b) => a.localeCompare(b));
-
-  const filteredDates = filterByRange(displayDates, range);
-  const readingsAsc = [...readings].sort((a, b) => a.date.localeCompare(b.date));
-
-  return filteredDates.map(date => ({
-    date,
-    weight_kg: getEffectiveWeightForDate(readingsAsc, date),
-  })).filter(point => point.weight_kg != null);
-}
-
 // Build a responsive SVG line chart.
 // points: [{date, value}] sorted oldest→newest
 // opts: { formatY, lineClass, emptyMsg }
@@ -2121,6 +2091,10 @@ function buildLineChart(points, opts = {}) {
   const n = points.length;
   const toX = i => pl + (i / (n - 1)) * plotW;
   const toY = v => pt + (1 - (v - minV) / vRange) * plotH;
+  const dotFilter = typeof opts.dotFilter === 'function'
+    ? opts.dotFilter
+    : ((point, index, allPoints) => allPoints.length <= 40);
+  const dotClass = opts.dotClass || 'chart-dot';
 
   if (points.length === 1) {
     const x = pl + plotW / 2;
@@ -2131,18 +2105,29 @@ function buildLineChart(points, opts = {}) {
            preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
         <text x="${pl - 3}" y="${pt + 4}" class="chart-label" text-anchor="end">${fmtSingle(points[0].value)}</text>
         <text x="${pl}" y="${H}" class="chart-label" text-anchor="start">${formatDateShort(points[0].date)}</text>
-        <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" class="chart-dot"/>
+        ${dotFilter(points[0], 0, points) ? `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" class="${dotClass}"/>` : ''}
       </svg>
     `;
   }
 
-  const pathD = points.map((p, i) =>
-    `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(p.value).toFixed(1)}`
-  ).join(' ');
+  const pathD = opts.mode === 'step-after'
+    ? (() => {
+        let path = `M${toX(0).toFixed(1)},${toY(points[0].value).toFixed(1)}`;
+        for (let i = 0; i < n - 1; i++) {
+          path += ` L${toX(i + 1).toFixed(1)},${toY(points[i].value).toFixed(1)}`;
+          path += ` L${toX(i + 1).toFixed(1)},${toY(points[i + 1].value).toFixed(1)}`;
+        }
+        return path;
+      })()
+    : points.map((p, i) =>
+        `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(p.value).toFixed(1)}`
+      ).join(' ');
 
-  const dots = n <= 40 ? points.map((p, i) =>
-    `<circle cx="${toX(i).toFixed(1)}" cy="${toY(p.value).toFixed(1)}" r="2.5" class="chart-dot"/>`
-  ).join('') : '';
+  const dots = points.map((p, i) =>
+    dotFilter(p, i, points)
+      ? `<circle cx="${toX(i).toFixed(1)}" cy="${toY(p.value).toFixed(1)}" r="2.8" class="${dotClass}"/>`
+      : ''
+  ).join('');
 
   const fmt = opts.formatY || (v => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v)));
   const yLabelMax = fmt(maxV);
@@ -2230,6 +2215,7 @@ function renderProgressShell(container) {
         <button class="range-btn" data-range="6m">6M</button>
         <button class="range-btn" data-range="1y">1Y</button>
         <button class="range-btn" data-range="all">All</button>
+        <button class="progress-export-btn" type="button">Export JSON</button>
       </div>
       <div class="progress-content"></div>
     </div>
@@ -2254,6 +2240,10 @@ function renderProgressShell(container) {
       loadProgressSection();
     });
   });
+
+  container.querySelector('.progress-export-btn').addEventListener('click', () => {
+    window.location.href = '/api/export/json';
+  });
 }
 
 async function loadProgressSection() {
@@ -2275,20 +2265,35 @@ async function renderBodySection(container) {
   const todayReading = readings.find(r => r.date === today) || null;
   const latestReading = readings[0] || null;
   const entryCount = readings.length;
+  const hasNoReadings = entryCount === 0;
+  const hasOneReading = entryCount === 1;
 
   // Filtered for chart (oldest→newest)
-  const filtered = await getBodyTrendSeries(progressTimeRange);
-  const activeDateCount = filtered.length;
+  const chartSeries = filterByRange(
+    [...readings].sort((a, b) => a.date.localeCompare(b.date)),
+    progressTimeRange
+  );
+  const activeDateCount = chartSeries.length;
   const chartHtml = buildLineChart(
-    filtered.map(r => ({ date: r.date, value: r.weight_kg })),
-    { formatY: v => v.toFixed(1), emptyMsg: 'Log your weight to see it across your workout history' }
+    chartSeries.map(r => ({ date: r.date, value: r.weight_kg, measured: true })),
+    {
+      formatY: v => v.toFixed(1),
+      emptyMsg: 'Add your first weigh-in above to start tracking',
+      dotFilter: point => point.measured,
+      dotClass: 'chart-dot chart-dot-measured',
+    }
   );
 
   // History HTML (grouped by week, collapsible)
   const historyHtml = buildBodyHistoryHtml(readings);
   const hint = latestReading
     ? `Latest logged: ${latestReading.weight_kg} kg on ${formatDate(latestReading.date)} - carries forward to today`
-    : 'Enter your weight to start tracking';
+    : 'Add your weight above to start tracking and support bodyweight-aware progress later';
+  const chartHelper = hasNoReadings
+    ? 'Your first logged weight will be used for bodyweight-aware calculations until a newer weigh-in replaces it.'
+    : hasOneReading
+      ? 'This chart shows your first weigh-in. Add another entry later to start seeing direction over time.'
+      : 'The chart connects actual weigh-ins. Calculations still carry your first logged weight backward and later weights forward until replaced.';
 
   container.innerHTML = `
     <div class="body-today-card">
@@ -2311,19 +2316,21 @@ async function renderBodySection(container) {
       </div>
       <div class="progress-stat-card">
         <div class="progress-stat-value">${activeDateCount}</div>
-        <div class="progress-stat-label">Trend dates</div>
+        <div class="progress-stat-label">Logged dates</div>
       </div>
     </div>
     <div class="progress-chart-card">
       <div class="progress-chart-title">Weight trend</div>
       ${chartHtml}
-      <div class="progress-helper-text">Your first logged weight fills earlier history. Later weights apply forward until the next logged weight, with the latest carrying forward to today.</div>
+      <div class="progress-helper-text">${chartHelper}</div>
     </div>
     <div class="progress-history-section">
       <button class="progress-history-toggle">History <span class="toggle-arrow">${bodyHistoryExpanded ? '^' : 'v'}</span></button>
       <div class="progress-history-list${bodyHistoryExpanded ? '' : ' hidden'}">${historyHtml}</div>
     </div>
   `;
+
+  wireExpandableCharts(container);
 
   // Today input
   const todayInput = container.querySelector('.body-today-input');
@@ -2401,6 +2408,50 @@ function wireBodyHistoryInputs(historyContainer, sectionContainer) {
   });
 }
 
+function compareExerciseSearchResults(a, b, query) {
+  const aName = a.name.toLowerCase();
+  const bName = b.name.toLowerCase();
+  const aStarts = aName.startsWith(query);
+  const bStarts = bName.startsWith(query);
+  if (aStarts !== bStarts) return aStarts ? -1 : 1;
+
+  const aIndex = aName.indexOf(query);
+  const bIndex = bName.indexOf(query);
+  if (aIndex !== bIndex) return aIndex - bIndex;
+
+  const aDate = a.last_date || '';
+  const bDate = b.last_date || '';
+  if (aDate !== bDate) return bDate.localeCompare(aDate);
+
+  return a.name.localeCompare(b.name);
+}
+
+function openChartModal(card) {
+  const modal = document.getElementById('progression-modal');
+  const title = document.getElementById('progression-title');
+  const body = document.getElementById('progression-body');
+  const titleText = card.querySelector('.progress-chart-title')?.textContent?.trim() || 'Chart';
+  const svg = card.querySelector('.progress-chart-svg');
+  const subtitle = card.querySelector('.chart-subtitle, .progress-helper-text');
+
+  title.textContent = titleText;
+  body.innerHTML = `
+    <div class="chart-modal-view">
+      ${svg ? svg.outerHTML : ''}
+      ${subtitle ? `<div class="chart-modal-copy">${subtitle.textContent}</div>` : ''}
+    </div>
+  `;
+  modal.classList.remove('hidden');
+}
+
+function wireExpandableCharts(container) {
+  container.querySelectorAll('.progress-chart-card').forEach(card => {
+    if (!card.querySelector('.progress-chart-svg')) return;
+    card.classList.add('progress-chart-expandable');
+    card.addEventListener('click', () => openChartModal(card));
+  });
+}
+
 // ---- Strength section ----
 
 async function renderStrengthSection(container) {
@@ -2427,7 +2478,10 @@ async function renderStrengthSection(container) {
   searchInput.addEventListener('input', () => {
     const q = searchInput.value.toLowerCase().trim();
     if (!q) { searchResults.classList.add('hidden'); searchResults.innerHTML = ''; return; }
-    const matches = exercises.filter(e => e.name.toLowerCase().includes(q)).slice(0, 12);
+    const matches = exercises
+      .filter(e => e.name.toLowerCase().includes(q))
+      .sort((a, b) => compareExerciseSearchResults(a, b, q))
+      .slice(0, 12);
     if (matches.length === 0) { searchResults.classList.add('hidden'); return; }
     searchResults.innerHTML = matches.map(e =>
       `<div class="exercise-result-item" data-id="${e.id}" data-name="${e.name}">
@@ -2500,6 +2554,7 @@ async function renderStrengthChart(container) {
       <div class="chart-subtitle">How much of the prescribed work was completed — dips when weight increases are normal</div>
     </div>
   `;
+  wireExpandableCharts(container);
 }
 
 // ---- Workouts section ----
@@ -2508,11 +2563,13 @@ async function renderWorkoutsSection(container) {
   if (!workoutDatesCache) {
     workoutDatesCache = await api('/api/trends/frequency'); // [date, ...] ASC
   }
+  const backupStatus = await getBackupStatus();
   const filtered = filterByRange(workoutDatesCache, progressTimeRange); // plain strings
   const total = filtered.length;
   const bounds = getRangeBounds(progressTimeRange, filtered);
 
   const weeks = groupByWeek(filtered);
+  const weeksTrained = weeks.length;
   const avgPerWeek = bounds ? (total / countWeeksInRange(bounds.start, bounds.end)).toFixed(1) : '–';
 
   // Bar chart (cap at 52 bars)
@@ -2520,12 +2577,22 @@ async function renderWorkoutsSection(container) {
     label: formatDateShort(weekStart),
     value: items.length
   }));
+  const backupLabel = backupStatus.has_backup
+    ? `${backupStatus.current_week_exists ? 'Current week backed up' : 'Latest backup'}${backupStatus.latest_file ? `: ${backupStatus.latest_file}` : ''}`
+    : 'No weekly backup found yet';
+  const backupMeta = backupStatus.latest_created_at
+    ? `Updated ${new Date(backupStatus.latest_created_at).toLocaleString()}`
+    : 'A weekly backup is created automatically when the server runs';
 
   container.innerHTML = `
     <div class="progress-stats-row">
       <div class="progress-stat-card">
         <div class="progress-stat-value">${total}</div>
         <div class="progress-stat-label">Sessions</div>
+      </div>
+      <div class="progress-stat-card">
+        <div class="progress-stat-value">${weeksTrained}</div>
+        <div class="progress-stat-label">Weeks trained</div>
       </div>
       <div class="progress-stat-card">
         <div class="progress-stat-value">${avgPerWeek}</div>
@@ -2536,7 +2603,13 @@ async function renderWorkoutsSection(container) {
       <div class="progress-chart-title">Sessions per week</div>
       ${buildBarChart(barData)}
     </div>
+    <div class="progress-chart-card progress-info-card">
+      <div class="progress-chart-title">Backup status</div>
+      <div class="progress-info-value">${backupLabel}</div>
+      <div class="progress-helper-text">${backupMeta}</div>
+    </div>
   `;
+  wireExpandableCharts(container);
 }
 
 // --- Init ---
