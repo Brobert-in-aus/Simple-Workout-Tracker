@@ -768,14 +768,16 @@ function getWorkoutsInRange(fromDate, toDate) {
 // --- Trend / Progress helpers ---
 
 function getPerformedExercises() {
-  // All exercises that have at least one completed set, excluding warmups
+  // All effective exercises with at least one completed set, excluding warmups.
+  // If a workout exercise was swapped, attribute it to the override exercise.
   return db.prepare(`
-    SELECT DISTINCT e.id, e.name
-    FROM exercises e
-    JOIN day_exercises de ON de.exercise_id = e.id AND de.is_warmup = 0
-    JOIN workout_exercises we ON we.day_exercise_id = de.id AND we.skipped = 0
+    SELECT DISTINCT effective.id, effective.name
+    FROM workout_exercises we
+    JOIN day_exercises de ON de.id = we.day_exercise_id AND de.is_warmup = 0
     JOIN workout_sets ws ON ws.workout_exercise_id = we.id AND ws.completed = 1
-    ORDER BY e.name
+    JOIN exercises effective ON effective.id = COALESCE(we.override_exercise_id, de.exercise_id)
+    WHERE we.skipped = 0
+    ORDER BY effective.name
   `).all();
 }
 
@@ -790,7 +792,9 @@ function getExerciseTrend(exerciseId) {
     JOIN workouts w ON w.id = we.workout_id
     JOIN day_exercises de ON de.id = we.day_exercise_id
     JOIN workout_sets ws ON ws.workout_exercise_id = we.id
-    WHERE de.exercise_id = ? AND de.is_warmup = 0 AND we.skipped = 0
+    WHERE COALESCE(we.override_exercise_id, de.exercise_id) = ?
+      AND de.is_warmup = 0
+      AND we.skipped = 0
     ORDER BY w.date ASC, ws.set_number ASC
   `).all(exerciseId);
 
@@ -826,8 +830,8 @@ function getExerciseTrend(exerciseId) {
   return result;
 }
 
-function getAllWorkoutDatesDistinct() {
-  return db.prepare('SELECT DISTINCT date FROM workouts ORDER BY date ASC').all().map(r => r.date);
+function getAllWorkoutSessionDates() {
+  return db.prepare('SELECT date FROM workouts ORDER BY date ASC, id ASC').all().map(r => r.date);
 }
 
 // --- Body weight helpers ---
@@ -938,5 +942,5 @@ module.exports = {
   // Trend / Progress helpers
   getPerformedExercises,
   getExerciseTrend,
-  getAllWorkoutDatesDistinct,
+  getAllWorkoutSessionDates,
 };

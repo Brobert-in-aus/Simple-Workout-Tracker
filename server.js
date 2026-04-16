@@ -448,7 +448,7 @@ app.get('/api/trends/exercise/:id', (req, res) => {
 });
 
 app.get('/api/trends/frequency', (req, res) => {
-  res.json(db.getAllWorkoutDatesDistinct());
+  res.json(db.getAllWorkoutSessionDates());
 });
 
 // --- Graceful shutdown ---

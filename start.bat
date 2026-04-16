@@ -107,7 +107,7 @@ set "choice="
 set /p "choice=  > "
 if /i "%choice%"=="r" goto restart
 if /i "%choice%"=="u" goto update
-if /i "%choice%"=="q" goto quit
+if /i "%choice%"=="q" goto do_quit
 goto menu
 
 :restart
@@ -168,7 +168,7 @@ call :log "=== UPDATE COMPLETE ==="
 timeout /t 1 /nobreak >nul
 goto start
 
-:quit
+:do_quit
 echo.
 call :log "--- Quit requested ---"
 echo  Stopping server...
