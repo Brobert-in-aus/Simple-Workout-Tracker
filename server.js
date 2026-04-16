@@ -43,6 +43,15 @@ app.post('/api/templates', (req, res) => {
   res.json({ id });
 });
 
+app.post('/api/templates/:id/duplicate', (req, res) => {
+  const templateId = parseInt(req.params.id);
+  const { name } = req.body || {};
+  // Name is optional; the DB helper picks a clean "Name Copy"/"Name Copy 2"
+  // when it's missing or collides.
+  const result = db.duplicateTemplate(templateId, name);
+  res.json(result);
+});
+
 app.put('/api/templates/:id', (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });

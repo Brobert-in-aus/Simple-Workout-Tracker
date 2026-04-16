@@ -43,6 +43,22 @@ function getMonday(iso) {
   return toISO(d);
 }
 
+// Group an array of items by ISO week (Monday-keyed).
+// getDateFn: item → ISO date string (defaults to item.date or item itself if string).
+// Returns [{weekStart, items}] sorted oldest-week-first.
+function groupByWeek(items, getDateFn) {
+  const fn = getDateFn || (x => typeof x === 'string' ? x : x.date);
+  const map = new Map();
+  for (const item of items) {
+    const wk = getMonday(fn(item));
+    if (!map.has(wk)) map.set(wk, []);
+    map.get(wk).push(item);
+  }
+  return [...map.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([weekStart, items]) => ({ weekStart, items }));
+}
+
 function getDayName(idx) {
   return ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][idx];
 }
@@ -51,14 +67,54 @@ function getDayNameShort(idx) {
   return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][idx];
 }
 
+let toastTimer = null;
+
+function showToast(message) {
+  if (!message) return;
+  let toast = document.getElementById('app-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'app-toast';
+    toast.className = 'app-toast hidden';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = message;
+  toast.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.classList.add('hidden');
+  }, 2800);
+}
+
 async function api(url, opts = {}) {
   const res = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
-  return res.json();
+  const contentType = res.headers.get('content-type') || '';
+  const payload = contentType.includes('application/json')
+    ? await res.json()
+    : await res.text();
+
+  if (!res.ok) {
+    const message =
+      payload && typeof payload === 'object' && payload.error
+        ? payload.error
+        : typeof payload === 'string' && payload.trim()
+          ? payload.trim()
+          : `Request failed (${res.status})`;
+    throw new Error(message);
+  }
+
+  return payload;
 }
+
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  const message = reason && reason.message ? reason.message : 'Something went wrong';
+  showToast(message);
+});
 
 function formatDuration(seconds) {
   if (seconds == null) return '?';
@@ -105,7 +161,6 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
 
-    if (btn.dataset.tab === 'history') loadHistory();
     if (btn.dataset.tab === 'template') loadTemplate();
     if (btn.dataset.tab === 'body') loadBodyTab();
   });
@@ -166,6 +221,11 @@ document.getElementById('week-prev').addEventListener('click', () => {
 document.getElementById('week-next').addEventListener('click', () => {
   currentWeekStart = shiftDate(currentWeekStart, 7);
   currentDate = currentWeekStart;
+  loadWeek();
+});
+document.getElementById('week-today').addEventListener('click', () => {
+  currentDate = todayStr();
+  currentWeekStart = getMonday(currentDate);
   loadWeek();
 });
 
@@ -277,6 +337,7 @@ async function loadWorkout() {
         deleteBtn.addEventListener('click', async () => {
           if (confirm(`Delete this ${templateName} workout? This cannot be undone.`)) {
             await api(`/api/workout/${workout.id}`, { method: 'DELETE' });
+            invalidateProgressCaches();
             loadWorkout();
           }
         });
@@ -335,6 +396,7 @@ async function beginWorkout(templateId) {
     body: { template_id: templateId }
   });
   // Reload the full page
+  invalidateProgressCaches();
   loadWorkout();
 }
 
@@ -537,6 +599,7 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
     const showCopyWeight = !isDuration && ex.sets.length > 1;
     html += `
       <div class="set-actions">
+        <button class="btn btn-sm btn-outline mark-all-done-btn" data-weid="${ex.id}">Done All</button>
         <button class="btn btn-sm btn-outline add-set-btn" data-weid="${ex.id}" data-target-reps="${targetRepsNum}">+ Set</button>
         ${ex.sets.length > 1 ? `<button class="btn btn-sm btn-outline remove-set-btn" data-weid="${ex.id}">&minus; Set</button>` : ''}
         ${showCopyWeight ? `<button class="btn btn-sm btn-outline copy-weight-btn" data-weid="${ex.id}" title="Copy first set weight to all sets">Weight &darr;</button>` : ''}
@@ -616,6 +679,8 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
   if (addSetBtn) addSetBtn.addEventListener('click', () => addSet(ex, card));
   const removeSetBtn = card.querySelector('.remove-set-btn');
   if (removeSetBtn) removeSetBtn.addEventListener('click', () => removeSet(ex, card));
+  const markAllDoneBtn = card.querySelector('.mark-all-done-btn');
+  if (markAllDoneBtn) markAllDoneBtn.addEventListener('click', () => markAllSetsDone(card, ex));
   const copyWeightBtn = card.querySelector('.copy-weight-btn');
   if (copyWeightBtn) copyWeightBtn.addEventListener('click', () => copyWeightToAll(card, ex));
 
@@ -628,6 +693,7 @@ async function toggleSkip(ex, workout) {
     method: 'POST',
     body: { skipped: !!ex.skipped },
   });
+  invalidateProgressCaches();
   loadWorkout();
 }
 
@@ -638,6 +704,7 @@ async function handleSwap(ex, workout, card) {
       method: 'PUT',
       body: { exercise_name: null },
     });
+    invalidateProgressCaches();
     loadWorkout();
     return;
   }
@@ -669,6 +736,7 @@ async function handleSwap(ex, workout, card) {
       method: 'PUT',
       body: { exercise_name: name },
     });
+    invalidateProgressCaches();
     loadWorkout();
   });
   input.addEventListener('keydown', (e) => {
@@ -737,6 +805,7 @@ async function showAddExerciseToWorkoutPanel(container, workout) {
         save_to_template: saveToTemplate,
       },
     });
+    invalidateProgressCaches();
     loadWorkout();
   });
 
@@ -791,6 +860,7 @@ async function saveExercise(ex) {
     method: 'POST',
     body: { sets, note },
   });
+  invalidateProgressCaches();
 }
 
 function moveCursorToEnd(input) {
@@ -962,6 +1032,22 @@ function removeSet(ex, card) {
   debounceSave(ex);
 }
 
+function markAllSetsDone(card, ex) {
+  let changed = false;
+  card.querySelectorAll('.set-row').forEach(row => {
+    const btn = row.querySelector('.set-check');
+    if (!btn || btn.classList.contains('done')) return;
+    btn.classList.add('done');
+    btn.innerHTML = '&#x2713;';
+    row.classList.add('set-done');
+    changed = true;
+  });
+  if (changed) {
+    showToast('Marked all sets done');
+    debounceSave(ex);
+  }
+}
+
 async function moveExercise(ex, workout, direction) {
   const allExercises = workout.exercises;
   const idx = allExercises.indexOf(ex);
@@ -975,36 +1061,22 @@ async function moveExercise(ex, workout, direction) {
     method: 'PUT',
     body: { order, workout_id: workout.id },
   });
+  invalidateProgressCaches();
   loadWorkout();
 }
 
 // --- History Tab ---
-async function loadHistory() {
+async function renderHistorySection(container) {
+  container.innerHTML = '<div class="progress-loading">Loading…</div>';
   const data = await api('/api/history');
-  const container = document.getElementById('history-list');
-  const detail = document.getElementById('history-detail');
-  detail.classList.add('hidden');
-  container.classList.remove('hidden');
 
   if (data.length === 0) {
     container.innerHTML = '<div class="empty-state">No workout history yet</div>';
     return;
   }
 
-  const weeks = {};
-  for (const w of data) {
-    const d = new Date(w.date + 'T00:00:00');
-    const mon = new Date(d);
-    const jsDay = mon.getDay();
-    const diff = jsDay === 0 ? -6 : 1 - jsDay;
-    mon.setDate(mon.getDate() + diff);
-    const weekKey = `${mon.getFullYear()}-${String(mon.getMonth() + 1).padStart(2, '0')}-${String(mon.getDate()).padStart(2, '0')}`;
-    if (!weeks[weekKey]) weeks[weekKey] = [];
-    weeks[weekKey].push(w);
-  }
-
   let html = '';
-  for (const [weekStart, workouts] of Object.entries(weeks)) {
+  for (const { weekStart, items: workouts } of groupByWeek(data)) {
     html += `<div class="history-week">`;
     html += `<div class="history-week-header">Week of ${formatDate(weekStart)}</div>`;
     for (const w of workouts) {
@@ -1020,25 +1092,22 @@ async function loadHistory() {
   container.innerHTML = html;
 
   container.querySelectorAll('.history-item').forEach(item => {
-    item.addEventListener('click', () => showHistoryDetail(item.dataset.date));
+    item.addEventListener('click', () => renderHistoryDetail(item.dataset.date, container));
   });
 }
 
-async function showHistoryDetail(date) {
+async function renderHistoryDetail(date, container) {
+  container.innerHTML = '<div class="progress-loading">Loading…</div>';
   const data = await api(`/api/workout/${date}`);
-  const container = document.getElementById('history-list');
-  const detail = document.getElementById('history-detail');
-  container.classList.add('hidden');
-  detail.classList.remove('hidden');
 
   if (!data || data.length === 0) {
-    detail.innerHTML = '<div class="empty-state">No data</div>';
+    container.innerHTML = '<div class="empty-state">No data</div>';
     return;
   }
 
   let html = `
-    <button class="btn btn-outline history-back" id="history-back-btn">&larr; Back</button>
-    <h3 style="margin-bottom:12px">${formatDate(date)}</h3>
+    <button class="btn btn-outline history-back-btn">&larr; Back</button>
+    <h3 style="margin:12px 0">${formatDate(date)}</h3>
   `;
 
   for (const block of data) {
@@ -1075,11 +1144,13 @@ async function showHistoryDetail(date) {
     }
   }
 
-  detail.innerHTML = html;
+  container.innerHTML = html;
 
-  document.getElementById('history-back-btn').addEventListener('click', loadHistory);
+  container.querySelector('.history-back-btn').addEventListener('click', () => {
+    renderHistorySection(container);
+  });
 
-  detail.querySelectorAll('.history-exercise-name').forEach(el => {
+  container.querySelectorAll('.history-exercise-name').forEach(el => {
     el.addEventListener('click', () => {
       const exId = el.dataset.exerciseId;
       if (exId) showProgression(exId, el.textContent);
@@ -1305,7 +1376,22 @@ async function loadTemplate() {
     chevron.className = 'template-chevron';
     chevron.innerHTML = '&rsaquo;';
 
+    const duplicateBtn = document.createElement('button');
+    duplicateBtn.className = 'btn btn-sm btn-outline template-duplicate-btn';
+    duplicateBtn.textContent = 'Duplicate';
+    duplicateBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      // Server picks a unique name ("Push Copy", "Push Copy 2", …) so repeated
+      // clicks stay tidy instead of producing "Push Copy Copy Copy".
+      const result = await api(`/api/templates/${tmpl.id}/duplicate`, { method: 'POST', body: {} });
+      invalidateTemplatesCache();
+      invalidateScheduleCache();
+      showToast(`Duplicated as "${result.name}"`);
+      loadTemplate();
+    });
+
     header.appendChild(nameInput);
+    header.appendChild(duplicateBtn);
     header.appendChild(chevron);
 
     const body = document.createElement('div');
@@ -1922,9 +2008,16 @@ let progressSection = 'body';     // 'body' | 'strength' | 'workouts'
 let progressTimeRange = '3m';     // '1m' | '3m' | '6m' | '1y' | 'all'
 let progressExerciseId = null;
 let progressExerciseName = '';
+let bodyHistoryExpanded = false;
 
 function invalidateBodyCache() {
   bodyWeightsCache = null;
+}
+
+function invalidateProgressCaches() {
+  performedExercisesCache = null;
+  exerciseTrendCache = {};
+  workoutDatesCache = null;
 }
 
 async function saveBodyWeight(date, weightKg) {
@@ -1947,12 +2040,73 @@ function filterByRange(data, range) {
   return data.filter(d => (typeof d === 'string' ? d : d.date) >= cutoffStr);
 }
 
+function getRangeBounds(range, allDates = []) {
+  const end = todayStr();
+  if (range === 'all') {
+    if (allDates.length === 0) return null;
+    return { start: allDates[0], end: allDates[allDates.length - 1] };
+  }
+
+  const now = new Date();
+  const startDate = new Date(now);
+  if (range === '1m') startDate.setMonth(now.getMonth() - 1);
+  else if (range === '3m') startDate.setMonth(now.getMonth() - 3);
+  else if (range === '6m') startDate.setMonth(now.getMonth() - 6);
+  else if (range === '1y') startDate.setFullYear(now.getFullYear() - 1);
+
+  return { start: toISO(startDate), end };
+}
+
+function countWeeksInRange(start, end) {
+  const startDate = new Date(start + 'T00:00:00');
+  const endDate = new Date(end + 'T00:00:00');
+  const diffMs = endDate - startDate;
+  if (diffMs <= 0) return 1;
+  return Math.max(1, Math.ceil((diffMs + 1) / (7 * 24 * 60 * 60 * 1000)));
+}
+
+function getEffectiveWeightForDate(readingsAsc, date) {
+  if (readingsAsc.length === 0) return null;
+
+  let effective = readingsAsc[0].weight_kg;
+  for (const reading of readingsAsc) {
+    if (reading.date > date) break;
+    effective = reading.weight_kg;
+  }
+
+  return effective;
+}
+
+async function getBodyTrendSeries(range) {
+  if (!bodyWeightsCache) bodyWeightsCache = await api('/api/body-weight');
+  const readings = bodyWeightsCache;
+  if (readings.length === 0) return [];
+
+  if (!workoutDatesCache) {
+    workoutDatesCache = await api('/api/trends/frequency');
+  }
+
+  const displayDates = [...new Set([
+    ...workoutDatesCache,
+    ...readings.map(r => r.date),
+    todayStr(),
+  ])].sort((a, b) => a.localeCompare(b));
+
+  const filteredDates = filterByRange(displayDates, range);
+  const readingsAsc = [...readings].sort((a, b) => a.date.localeCompare(b.date));
+
+  return filteredDates.map(date => ({
+    date,
+    weight_kg: getEffectiveWeightForDate(readingsAsc, date),
+  })).filter(point => point.weight_kg != null);
+}
+
 // Build a responsive SVG line chart.
 // points: [{date, value}] sorted oldest→newest
 // opts: { formatY, lineClass, emptyMsg }
 // Returns an HTML string (svg or empty-state div).
 function buildLineChart(points, opts = {}) {
-  if (points.length < 2) {
+  if (points.length === 0) {
     return `<div class="chart-empty">${opts.emptyMsg || 'Not enough data'}</div>`;
   }
   const W = 320, H = 110;
@@ -1967,6 +2121,20 @@ function buildLineChart(points, opts = {}) {
   const n = points.length;
   const toX = i => pl + (i / (n - 1)) * plotW;
   const toY = v => pt + (1 - (v - minV) / vRange) * plotH;
+
+  if (points.length === 1) {
+    const x = pl + plotW / 2;
+    const y = pt + plotH / 2;
+    const fmtSingle = opts.formatY || (v => String(Math.round(v)));
+    return `
+      <svg class="progress-chart-svg" viewBox="0 0 ${W} ${H}"
+           preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+        <text x="${pl - 3}" y="${pt + 4}" class="chart-label" text-anchor="end">${fmtSingle(points[0].value)}</text>
+        <text x="${pl}" y="${H}" class="chart-label" text-anchor="start">${formatDateShort(points[0].date)}</text>
+        <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" class="chart-dot"/>
+      </svg>
+    `;
+  }
 
   const pathD = points.map((p, i) =>
     `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(p.value).toFixed(1)}`
@@ -2042,6 +2210,7 @@ async function loadBodyTab() {
       b.classList.toggle('active', b.dataset.section === progressSection));
     tab.querySelectorAll('.range-btn').forEach(b =>
       b.classList.toggle('active', b.dataset.range === progressTimeRange));
+    tab.querySelector('.progress-range-row').classList.toggle('hidden', progressSection === 'history');
   }
   await loadProgressSection();
 }
@@ -2053,6 +2222,7 @@ function renderProgressShell(container) {
         <button class="seg-btn active" data-section="body">Body</button>
         <button class="seg-btn" data-section="strength">Strength</button>
         <button class="seg-btn" data-section="workouts">Workouts</button>
+        <button class="seg-btn" data-section="history">History</button>
       </div>
       <div class="progress-range-row">
         <button class="range-btn" data-range="1m">1M</button>
@@ -2070,6 +2240,8 @@ function renderProgressShell(container) {
       container.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       progressSection = btn.dataset.section;
+      // Range picker is irrelevant for History
+      container.querySelector('.progress-range-row').classList.toggle('hidden', progressSection === 'history');
       loadProgressSection();
     });
   });
@@ -2090,7 +2262,8 @@ async function loadProgressSection() {
   content.innerHTML = '<div class="progress-loading">Loading…</div>';
   if (progressSection === 'body') await renderBodySection(content);
   else if (progressSection === 'strength') await renderStrengthSection(content);
-  else await renderWorkoutsSection(content);
+  else if (progressSection === 'workouts') await renderWorkoutsSection(content);
+  else await renderHistorySection(content);
 }
 
 // ---- Body section ----
@@ -2100,38 +2273,55 @@ async function renderBodySection(container) {
   const readings = bodyWeightsCache; // DESC order from server
   const today = todayStr();
   const todayReading = readings.find(r => r.date === today) || null;
-  const prev = readings.find(r => r.date < today);
+  const latestReading = readings[0] || null;
+  const entryCount = readings.length;
 
   // Filtered for chart (oldest→newest)
-  const filtered = filterByRange([...readings].reverse(), progressTimeRange);
+  const filtered = await getBodyTrendSeries(progressTimeRange);
+  const activeDateCount = filtered.length;
   const chartHtml = buildLineChart(
     filtered.map(r => ({ date: r.date, value: r.weight_kg })),
-    { formatY: v => v.toFixed(1), emptyMsg: 'Log more readings to see the trend' }
+    { formatY: v => v.toFixed(1), emptyMsg: 'Log your weight to see it across your workout history' }
   );
 
   // History HTML (grouped by week, collapsible)
   const historyHtml = buildBodyHistoryHtml(readings);
+  const hint = latestReading
+    ? `Latest logged: ${latestReading.weight_kg} kg on ${formatDate(latestReading.date)} - carries forward to today`
+    : 'Enter your weight to start tracking';
 
   container.innerHTML = `
     <div class="body-today-card">
       <div class="body-today-label">${formatDate(today)}</div>
       <div class="body-today-input-row">
         <input type="number" class="body-today-input" value="${todayReading ? todayReading.weight_kg : ''}"
-               placeholder="–" step="0.1" inputmode="decimal" min="20" max="400">
+               placeholder="-" step="0.1" inputmode="decimal" min="20" max="400">
         <span class="body-today-unit">kg</span>
       </div>
-      <div class="body-today-hint">${prev
-        ? `Previous: ${prev.weight_kg} kg &mdash; ${formatDate(prev.date)}`
-        : 'Enter your weight to start tracking'
-      }</div>
+      <div class="body-today-hint">${hint}</div>
+    </div>
+    <div class="progress-stats-row body-stats-row">
+      <div class="progress-stat-card">
+        <div class="progress-stat-value">${latestReading ? latestReading.weight_kg.toFixed(1) : '-'}</div>
+        <div class="progress-stat-label">Latest kg</div>
+      </div>
+      <div class="progress-stat-card">
+        <div class="progress-stat-value">${entryCount}</div>
+        <div class="progress-stat-label">Logged entries</div>
+      </div>
+      <div class="progress-stat-card">
+        <div class="progress-stat-value">${activeDateCount}</div>
+        <div class="progress-stat-label">Trend dates</div>
+      </div>
     </div>
     <div class="progress-chart-card">
       <div class="progress-chart-title">Weight trend</div>
       ${chartHtml}
+      <div class="progress-helper-text">Your first logged weight fills earlier history. Later weights apply forward until the next logged weight, with the latest carrying forward to today.</div>
     </div>
     <div class="progress-history-section">
-      <button class="progress-history-toggle">History <span class="toggle-arrow">▾</span></button>
-      <div class="progress-history-list hidden">${historyHtml}</div>
+      <button class="progress-history-toggle">History <span class="toggle-arrow">${bodyHistoryExpanded ? '^' : 'v'}</span></button>
+      <div class="progress-history-list${bodyHistoryExpanded ? '' : ' hidden'}">${historyHtml}</div>
     </div>
   `;
 
@@ -2139,12 +2329,15 @@ async function renderBodySection(container) {
   const todayInput = container.querySelector('.body-today-input');
   attachFirstTapCursorEnd(todayInput);
   let todayTimer = null;
+  const originalTodayValue = todayReading ? String(todayReading.weight_kg) : '';
   const saveTodayWeight = async () => {
     const v = parseFloat(todayInput.value);
     if (isNaN(v) || v <= 0) return;
+    if (String(v) === originalTodayValue) return;
     await saveBodyWeight(today, v);
     // Refresh body section in-place
     bodyWeightsCache = null;
+    showToast('Weight saved');
     await renderBodySection(container);
   };
   todayInput.addEventListener('change', () => { clearTimeout(todayTimer); todayTimer = setTimeout(saveTodayWeight, 600); });
@@ -2155,7 +2348,8 @@ async function renderBodySection(container) {
   const list   = container.querySelector('.progress-history-list');
   toggle.addEventListener('click', () => {
     const collapsed = list.classList.toggle('hidden');
-    toggle.querySelector('.toggle-arrow').textContent = collapsed ? '▾' : '▴';
+    bodyHistoryExpanded = !collapsed;
+    toggle.querySelector('.toggle-arrow').textContent = collapsed ? 'v' : '^';
   });
 
   // History inputs
@@ -2164,18 +2358,8 @@ async function renderBodySection(container) {
 
 function buildBodyHistoryHtml(readings) {
   if (readings.length === 0) return '<div class="empty-state">No readings yet</div>';
-  const weeks = {};
-  for (const r of readings) {
-    const d = new Date(r.date + 'T00:00:00');
-    const mon = new Date(d);
-    const jsDay = mon.getDay();
-    mon.setDate(mon.getDate() + (jsDay === 0 ? -6 : 1 - jsDay));
-    const wk = toISO(mon);
-    if (!weeks[wk]) weeks[wk] = [];
-    weeks[wk].push(r);
-  }
   let html = '';
-  for (const [weekStart, wReadings] of Object.entries(weeks)) {
+  for (const { weekStart, items: wReadings } of groupByWeek(readings)) {
     html += `<div class="history-week">
       <div class="history-week-header">Week of ${formatDate(weekStart)}</div>`;
     for (const r of wReadings) {
@@ -2201,28 +2385,16 @@ function wireBodyHistoryInputs(historyContainer, sectionContainer) {
     attachFirstTapCursorEnd(input);
     const date = input.dataset.date;
     let timer = null;
+    const originalValue = input.dataset.original;
     const doSave = async () => {
       const v = parseFloat(input.value);
       if (isNaN(v) || v <= 0) { input.value = input.dataset.original; return; }
+      if (String(v) === originalValue) return;
       await saveBodyWeight(date, v);
       input.dataset.original = String(v);
-      // Sync today widget if needed
-      if (date === todayStr()) {
-        const todayInput = sectionContainer.querySelector('.body-today-input');
-        if (todayInput) todayInput.value = v;
-      }
-      // Refresh chart
       bodyWeightsCache = null;
-      bodyWeightsCache = await api('/api/body-weight');
-      const filtered = filterByRange([...bodyWeightsCache].reverse(), progressTimeRange);
-      const chartCard = sectionContainer.querySelector('.progress-chart-card');
-      if (chartCard) {
-        const chartHtml = buildLineChart(
-          filtered.map(r => ({ date: r.date, value: r.weight_kg })),
-          { formatY: v2 => v2.toFixed(1) }
-        );
-        chartCard.querySelector('.progress-chart-svg, .chart-empty').outerHTML = chartHtml;
-      }
+      showToast('Weight saved');
+      await renderBodySection(sectionContainer);
     };
     input.addEventListener('change', () => { clearTimeout(timer); timer = setTimeout(doSave, 600); });
     input.addEventListener('blur',   () => { clearTimeout(timer); doSave(); });
@@ -2258,7 +2430,10 @@ async function renderStrengthSection(container) {
     const matches = exercises.filter(e => e.name.toLowerCase().includes(q)).slice(0, 12);
     if (matches.length === 0) { searchResults.classList.add('hidden'); return; }
     searchResults.innerHTML = matches.map(e =>
-      `<div class="exercise-result-item" data-id="${e.id}" data-name="${e.name}">${e.name}</div>`
+      `<div class="exercise-result-item" data-id="${e.id}" data-name="${e.name}">
+        <span class="result-name">${e.name}</span>
+        ${e.last_date ? `<span class="result-last-date">${formatDateShort(e.last_date)}</span>` : ''}
+      </div>`
     ).join('');
     searchResults.classList.remove('hidden');
   });
@@ -2317,10 +2492,12 @@ async function renderStrengthChart(container) {
     <div class="progress-chart-card">
       <div class="progress-chart-title">Volume <span class="chart-title-unit">(kg × reps)</span></div>
       ${volChart}
+      <div class="chart-subtitle">Total weight moved per session — the primary signal of long-term progress</div>
     </div>
     <div class="progress-chart-card">
       <div class="progress-chart-title">Set completion</div>
       ${compChart}
+      <div class="chart-subtitle">How much of the prescribed work was completed — dips when weight increases are normal</div>
     </div>
   `;
 }
@@ -2333,24 +2510,15 @@ async function renderWorkoutsSection(container) {
   }
   const filtered = filterByRange(workoutDatesCache, progressTimeRange); // plain strings
   const total = filtered.length;
+  const bounds = getRangeBounds(progressTimeRange, filtered);
 
-  // Group by week
-  const weekMap = new Map();
-  for (const date of filtered) {
-    const d = new Date(date + 'T00:00:00');
-    const mon = new Date(d);
-    const jsDay = mon.getDay();
-    mon.setDate(mon.getDate() + (jsDay === 0 ? -6 : 1 - jsDay));
-    const wk = toISO(mon);
-    weekMap.set(wk, (weekMap.get(wk) || 0) + 1);
-  }
-  const weeks = [...weekMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  const avgPerWeek = weeks.length > 0 ? (total / weeks.length).toFixed(1) : '–';
+  const weeks = groupByWeek(filtered);
+  const avgPerWeek = bounds ? (total / countWeeksInRange(bounds.start, bounds.end)).toFixed(1) : '–';
 
   // Bar chart (cap at 52 bars)
-  const barData = weeks.slice(-52).map(([wk, count]) => ({
-    label: formatDateShort(wk),
-    value: count
+  const barData = weeks.slice(-52).map(({ weekStart, items }) => ({
+    label: formatDateShort(weekStart),
+    value: items.length
   }));
 
   container.innerHTML = `

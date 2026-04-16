@@ -1,7 +1,8 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-const DB_PATH = path.join(__dirname, 'data', 'workouts.db');
+// Allow tests and dev scripts to point at a disposable DB without touching data/workouts.db.
+const DB_PATH = process.env.WORKOUT_DB_PATH || path.join(__dirname, 'data', 'workouts.db');
 
 let db;
 
@@ -228,6 +229,85 @@ function getAllTemplates() {
 function createTemplate(name) {
   const info = db.prepare('INSERT INTO days (day_index, name) VALUES (-1, ?)').run(name);
   return info.lastInsertRowid;
+}
+
+// Given "Push", "Push Copy", or "Push Copy 4", return the base root (e.g. "Push")
+// so repeated duplications stay "Push Copy", "Push Copy 2" instead of piling
+// up "Push Copy Copy Copy".
+function stripCopySuffix(name) {
+  return name.replace(/\s+Copy(\s+\d+)?$/i, '').trim() || name.trim();
+}
+
+function computeUniqueTemplateName(sourceName) {
+  const root = stripCopySuffix(sourceName);
+  const existing = new Set(
+    db.prepare('SELECT name FROM days').all().map(r => r.name)
+  );
+  let candidate = `${root} Copy`;
+  let n = 2;
+  while (existing.has(candidate)) {
+    candidate = `${root} Copy ${n}`;
+    n++;
+  }
+  return candidate;
+}
+
+function duplicateTemplate(id, name) {
+  const template = db.prepare('SELECT * FROM days WHERE id = ?').get(id);
+  if (!template) throw new Error('Template not found');
+
+  // Pick a clean, unique name based on the source template. Honour an explicit
+  // caller-provided name when it's free; otherwise fall back to the auto-computed
+  // series so repeated clicks don't stutter into "Name Copy Copy".
+  const provided = typeof name === 'string' ? name.trim() : '';
+  const existingNames = new Set(
+    db.prepare('SELECT name FROM days').all().map(r => r.name)
+  );
+  const finalName = (provided && !existingNames.has(provided))
+    ? provided
+    : computeUniqueTemplateName(provided || template.name);
+
+  const exercises = db.prepare(`
+    SELECT *
+    FROM day_exercises
+    WHERE day_id = ? AND archived = 0
+    ORDER BY sort_order
+  `).all(id);
+
+  const txn = db.transaction(() => {
+    const info = db.prepare('INSERT INTO days (day_index, name) VALUES (-1, ?)').run(finalName);
+    const newTemplateId = info.lastInsertRowid;
+
+    const insertExercise = db.prepare(`
+      INSERT INTO day_exercises (
+        day_id, exercise_id, target_sets, target_reps, sort_order, notes,
+        superset_group, is_warmup, is_duration, is_amrap, amrap_last_only,
+        is_adhoc, archived
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+    `);
+
+    for (const ex of exercises) {
+      insertExercise.run(
+        newTemplateId,
+        ex.exercise_id,
+        ex.target_sets,
+        ex.target_reps,
+        ex.sort_order,
+        ex.notes || null,
+        ex.superset_group || null,
+        ex.is_warmup ? 1 : 0,
+        ex.is_duration ? 1 : 0,
+        ex.is_amrap ? 1 : 0,
+        ex.amrap_last_only ? 1 : 0
+      );
+    }
+
+    return newTemplateId;
+  });
+
+  const newTemplateId = txn();
+  return { id: newTemplateId, name: finalName };
 }
 
 function updateTemplate(id, name) {
@@ -770,13 +850,16 @@ function getWorkoutsInRange(fromDate, toDate) {
 function getPerformedExercises() {
   // All effective exercises with at least one completed set, excluding warmups.
   // If a workout exercise was swapped, attribute it to the override exercise.
+  // last_date = most recent workout date for the exercise (for the Strength picker).
   return db.prepare(`
-    SELECT DISTINCT effective.id, effective.name
+    SELECT effective.id, effective.name, MAX(w.date) as last_date
     FROM workout_exercises we
     JOIN day_exercises de ON de.id = we.day_exercise_id AND de.is_warmup = 0
     JOIN workout_sets ws ON ws.workout_exercise_id = we.id AND ws.completed = 1
     JOIN exercises effective ON effective.id = COALESCE(we.override_exercise_id, de.exercise_id)
+    JOIN workouts w ON w.id = we.workout_id
     WHERE we.skipped = 0
+    GROUP BY effective.id, effective.name
     ORDER BY effective.name
   `).all();
 }
@@ -889,6 +972,7 @@ module.exports = {
   // Template management
   getAllTemplates,
   createTemplate,
+  duplicateTemplate,
   updateTemplate,
   deleteTemplate,
   // Schedule management
