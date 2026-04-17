@@ -1439,10 +1439,49 @@ html, body {
 
 /* --- Linked exercise indicator --- */
 .linked-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   color: var(--accent);
   margin-top: 2px;
   opacity: 0.85;
+}
+
+.linked-indicator.targets-independent {
+  color: var(--text-dim);
+  opacity: 1;
+}
+
+.sync-chain-icon {
+  flex-shrink: 0;
+}
+
+/* --- Sync targets toggle button in inline edit form --- */
+.sync-targets-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid;
+  cursor: pointer;
+  background: transparent;
+  transition: color 0.15s, border-color 0.15s;
+  line-height: 1.2;
+  margin-bottom: 2px;
+}
+
+.sync-targets-btn.is-synced {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.sync-targets-btn.is-independent {
+  color: var(--text-dim);
+  border-color: var(--border);
 }
 
 /* --- Archived (soft-deleted) exercises in template editor --- */

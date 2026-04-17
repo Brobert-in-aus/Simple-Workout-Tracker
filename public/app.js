@@ -8,6 +8,10 @@ let templatesCache = null;
 let backupStatusCache = null;
 const STRENGTH_FAVORITES_KEY = 'strengthFavoriteExerciseIds';
 
+// Chain-link SVG icons for the targets-sync toggle in the template editor
+const CHAIN_SVG_LINKED = `<svg class="sync-chain-icon" width="13" height="9" viewBox="0 0 20 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1.5" width="7.5" height="9" rx="3.75"/><rect x="11.5" y="1.5" width="7.5" height="9" rx="3.75"/><line x1="8.5" y1="6" x2="11.5" y2="6"/></svg>`;
+const CHAIN_SVG_BROKEN = `<svg class="sync-chain-icon" width="13" height="9" viewBox="0 0 20 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1.5" width="7" height="9" rx="3.5"/><rect x="12" y="1.5" width="7" height="9" rx="3.5"/></svg>`;
+
 // --- Helpers ---
 function todayStr() {
   const d = new Date();
@@ -1565,7 +1569,7 @@ async function loadTemplateExercises(templateId, container) {
             </div>
             <div class="template-exercise-detail">${ex.is_duration ? `${ex.target_sets} sets` : `${ex.target_sets}&times;${ex.target_reps}`}</div>
             ${ex.notes ? `<div class="template-exercise-note">${ex.notes.replace(/</g, '&lt;')}</div>` : ''}
-            ${ex.linked_templates && ex.linked_templates.length > 0 ? `<div class="linked-indicator">Linked: ${ex.linked_templates.join(', ')}</div>` : ''}
+            ${ex.linked_templates && ex.linked_templates.length > 0 ? `<div class="linked-indicator${ex.targets_independent ? ' targets-independent' : ''}">${ex.targets_independent ? CHAIN_SVG_BROKEN : CHAIN_SVG_LINKED} ${ex.targets_independent ? 'Targets independent' : 'Synced'}: ${ex.linked_templates.join(', ')}</div>` : ''}
           </div>
           <div class="template-exercise-actions">
             <button class="btn btn-sm tmpl-ss-toggle${hasSS ? ' active' : ''}" data-deid="${ex.id}">SS</button>
@@ -1691,6 +1695,7 @@ async function loadTemplateExercises(templateId, container) {
       const ex = exercises.find(e => e.id === deId);
       if (!ex || info.querySelector('.inline-edit-form')) return;
 
+      const isLinked = ex.linked_templates && ex.linked_templates.length > 0;
       info.innerHTML = `
         <div class="inline-edit-form">
           <input type="text" class="inline-edit-name" value="${ex.exercise_name}" placeholder="Name" autocomplete="off">
@@ -1699,6 +1704,7 @@ async function loadTemplateExercises(templateId, container) {
             <span class="inline-edit-x">&times;</span>
             <input type="text" class="inline-edit-reps" value="${ex.target_reps}" placeholder="Reps">
           </div>
+          ${isLinked ? `<button type="button" class="sync-targets-btn ${ex.targets_independent ? 'is-independent' : 'is-synced'}">${ex.targets_independent ? CHAIN_SVG_BROKEN : CHAIN_SVG_LINKED}<span class="sync-targets-label">${ex.targets_independent ? 'Targets independent' : 'Targets synced'}</span></button>` : ''}
           <input type="text" class="inline-edit-note" value="${(ex.notes || '').replace(/"/g, '&quot;')}" placeholder="Note (shown during workout)">
         </div>
       `;
@@ -1707,6 +1713,7 @@ async function loadTemplateExercises(templateId, container) {
       const setsInput = info.querySelector('.inline-edit-sets');
       const repsInput = info.querySelector('.inline-edit-reps');
       const noteInput = info.querySelector('.inline-edit-note');
+      const syncBtn = info.querySelector('.sync-targets-btn');
 
       // Delay focus to avoid the current click event causing immediate blur
       requestAnimationFrame(() => {
@@ -1715,6 +1722,10 @@ async function loadTemplateExercises(templateId, container) {
       });
 
       const restoreDisplay = (name, sets, reps, notes) => {
+        const linkedTemplates = ex.linked_templates || [];
+        const linkedHtml = linkedTemplates.length > 0
+          ? `<div class="linked-indicator${ex.targets_independent ? ' targets-independent' : ''}">${ex.targets_independent ? CHAIN_SVG_BROKEN : CHAIN_SVG_LINKED} ${ex.targets_independent ? 'Targets independent' : 'Synced'}: ${linkedTemplates.join(', ')}</div>`
+          : '';
         info.innerHTML = `
           <div class="template-exercise-name">
             ${name}
@@ -1724,6 +1735,7 @@ async function loadTemplateExercises(templateId, container) {
           </div>
           <div class="template-exercise-detail">${ex.is_duration ? `${sets} sets` : `${sets}&times;${reps}`}</div>
           ${notes ? `<div class="template-exercise-note">${notes.replace(/</g, '&lt;')}</div>` : ''}
+          ${linkedHtml}
         `;
       };
 
@@ -1783,6 +1795,42 @@ async function loadTemplateExercises(templateId, container) {
         });
         input.addEventListener('click', (e) => e.stopPropagation());
       });
+
+      if (syncBtn) {
+        let targetsIndependent = ex.targets_independent ? 1 : 0;
+        syncBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const curSets = parseInt(setsInput.value) || ex.target_sets;
+          const curReps = repsInput.value.trim() || ex.target_reps;
+
+          if (!targetsIndependent) {
+            // Break sync: make this slot's targets independent
+            await api(`/api/day-exercises/${deId}`, { method: 'PUT', body: { targets_independent: 1 } });
+            targetsIndependent = 1;
+            ex.targets_independent = 1;
+            syncBtn.className = 'sync-targets-btn is-independent';
+            syncBtn.innerHTML = `${CHAIN_SVG_BROKEN}<span class="sync-targets-label">Targets independent</span>`;
+          } else {
+            // Restore sync: check if current targets differ from linked slots
+            const linked = await api(`/api/day-exercises/${deId}/linked-targets`);
+            const syncedLinked = linked.filter(l => !l.targets_independent);
+            const differ = syncedLinked.some(l => l.target_sets !== curSets || String(l.target_reps) !== curReps);
+
+            if (differ && syncedLinked.length > 0) {
+              const templates = syncedLinked.map(l => l.template_name).join(', ');
+              const confirmed = confirm(`This will update "${ex.exercise_name}" on ${templates} to ${curSets} sets \u00d7 ${curReps} reps. Continue?`);
+              if (!confirmed) return;
+            }
+
+            // Clear independence flag and propagate current targets to synced linked slots
+            await api(`/api/day-exercises/${deId}`, { method: 'PUT', body: { targets_independent: 0, target_sets: curSets, target_reps: curReps } });
+            targetsIndependent = 0;
+            ex.targets_independent = 0;
+            syncBtn.className = 'sync-targets-btn is-synced';
+            syncBtn.innerHTML = `${CHAIN_SVG_LINKED}<span class="sync-targets-label">Targets synced</span>`;
+          }
+        });
+      }
     });
   });
 

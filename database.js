@@ -1,7 +1,8 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-const DB_PATH = path.join(__dirname, 'data', 'workouts.db');
+// Allow tests and dev scripts to point at a disposable DB without touching data/workouts.db.
+const DB_PATH = process.env.WORKOUT_DB_PATH || path.join(__dirname, 'data', 'workouts.db');
 
 let db;
 
@@ -146,6 +147,13 @@ function initSchema() {
     db.exec("ALTER TABLE day_exercises ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
   }
 
+  // Migration: add targets_independent flag to day_exercises (per-slot opt-out from target sync)
+  try {
+    db.prepare("SELECT targets_independent FROM day_exercises LIMIT 1").get();
+  } catch (e) {
+    db.exec("ALTER TABLE day_exercises ADD COLUMN targets_independent INTEGER NOT NULL DEFAULT 0");
+  }
+
   // Migration: populate schedule table from days if schedule is empty
   const scheduleCount = db.prepare("SELECT COUNT(*) as c FROM schedule").get().c;
   if (scheduleCount === 0) {
@@ -228,6 +236,86 @@ function getAllTemplates() {
 function createTemplate(name) {
   const info = db.prepare('INSERT INTO days (day_index, name) VALUES (-1, ?)').run(name);
   return info.lastInsertRowid;
+}
+
+// Given "Push", "Push Copy", or "Push Copy 4", return the base root (e.g. "Push")
+// so repeated duplications stay "Push Copy", "Push Copy 2" instead of piling
+// up "Push Copy Copy Copy".
+function stripCopySuffix(name) {
+  return name.replace(/\s+Copy(\s+\d+)?$/i, '').trim() || name.trim();
+}
+
+function computeUniqueTemplateName(sourceName) {
+  const root = stripCopySuffix(sourceName);
+  const existing = new Set(
+    db.prepare('SELECT name FROM days').all().map(r => r.name)
+  );
+  let candidate = `${root} Copy`;
+  let n = 2;
+  while (existing.has(candidate)) {
+    candidate = `${root} Copy ${n}`;
+    n++;
+  }
+  return candidate;
+}
+
+function duplicateTemplate(id, name) {
+  const template = db.prepare('SELECT * FROM days WHERE id = ?').get(id);
+  if (!template) throw new Error('Template not found');
+
+  // Pick a clean, unique name based on the source template. Honour an explicit
+  // caller-provided name when it's free; otherwise fall back to the auto-computed
+  // series so repeated clicks don't stutter into "Name Copy Copy".
+  const provided = typeof name === 'string' ? name.trim() : '';
+  const existingNames = new Set(
+    db.prepare('SELECT name FROM days').all().map(r => r.name)
+  );
+  const finalName = (provided && !existingNames.has(provided))
+    ? provided
+    : computeUniqueTemplateName(provided || template.name);
+
+  const exercises = db.prepare(`
+    SELECT *
+    FROM day_exercises
+    WHERE day_id = ? AND archived = 0
+    ORDER BY sort_order
+  `).all(id);
+
+  const txn = db.transaction(() => {
+    const info = db.prepare('INSERT INTO days (day_index, name) VALUES (-1, ?)').run(finalName);
+    const newTemplateId = info.lastInsertRowid;
+
+    const insertExercise = db.prepare(`
+      INSERT INTO day_exercises (
+        day_id, exercise_id, target_sets, target_reps, sort_order, notes,
+        superset_group, is_warmup, is_duration, is_amrap, amrap_last_only,
+        is_adhoc, archived, targets_independent
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
+    `);
+
+    for (const ex of exercises) {
+      insertExercise.run(
+        newTemplateId,
+        ex.exercise_id,
+        ex.target_sets,
+        ex.target_reps,
+        ex.sort_order,
+        ex.notes || null,
+        ex.superset_group || null,
+        ex.is_warmup ? 1 : 0,
+        ex.is_duration ? 1 : 0,
+        ex.is_amrap ? 1 : 0,
+        ex.amrap_last_only ? 1 : 0,
+        ex.targets_independent ? 1 : 0
+      );
+    }
+
+    return newTemplateId;
+  });
+
+  const newTemplateId = txn();
+  return { id: newTemplateId, name: finalName };
 }
 
 function updateTemplate(id, name) {
@@ -338,7 +426,7 @@ function getDayExercises(dayId, includeAdhoc = false) {
 }
 
 function updateDayExercise(id, fields) {
-  const allowed = ['target_sets', 'target_reps', 'sort_order', 'notes', 'superset_group', 'exercise_id', 'is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only'];
+  const allowed = ['target_sets', 'target_reps', 'sort_order', 'notes', 'superset_group', 'exercise_id', 'is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'targets_independent'];
   const updates = [];
   const values = [];
   for (const [key, val] of Object.entries(fields)) {
@@ -640,23 +728,39 @@ function reorderWorkoutExercises(workoutId, orderedIds) {
 // --- Exercise linking helpers ---
 
 function syncLinkedExercises(dayExerciseId, fields) {
-  const de = db.prepare('SELECT exercise_id, day_id, is_warmup FROM day_exercises WHERE id = ?').get(dayExerciseId);
+  const de = db.prepare('SELECT exercise_id, day_id, is_warmup, targets_independent FROM day_exercises WHERE id = ?').get(dayExerciseId);
   if (!de) return;
   const syncable = ['target_sets', 'target_reps', 'is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'notes'];
-  const updates = [];
-  const values = [];
+  const targetFields = new Set(['target_sets', 'target_reps']);
+
+  const targetUpdates = [], targetValues = [];
+  const otherUpdates = [], otherValues = [];
+
   for (const [key, val] of Object.entries(fields)) {
-    if (syncable.includes(key)) {
-      updates.push(`${key} = ?`);
-      values.push(val);
+    if (!syncable.includes(key)) continue;
+    if (targetFields.has(key)) {
+      if (de.targets_independent) continue; // source slot is independent — don't propagate targets
+      targetUpdates.push(`${key} = ?`);
+      targetValues.push(val);
+    } else {
+      otherUpdates.push(`${key} = ?`);
+      otherValues.push(val);
     }
   }
-  if (updates.length === 0) return;
-  // Only sync across different templates, matching by role (warmup↔warmup, main↔main)
-  // This prevents a warmup in one template from overwriting a main set in another.
-  // Skip archived rows so soft-deleted exercises aren't silently un-updated.
-  values.push(de.exercise_id, dayExerciseId, de.day_id, de.is_warmup);
-  db.prepare(`UPDATE day_exercises SET ${updates.join(', ')} WHERE exercise_id = ? AND id != ? AND day_id != ? AND is_warmup = ? AND archived = 0`).run(...values);
+
+  const baseWhere = 'exercise_id = ? AND id != ? AND day_id != ? AND is_warmup = ? AND archived = 0';
+  const baseParams = [de.exercise_id, dayExerciseId, de.day_id, de.is_warmup];
+
+  // Propagate target fields only to non-independent destination slots
+  if (targetUpdates.length > 0) {
+    db.prepare(`UPDATE day_exercises SET ${targetUpdates.join(', ')} WHERE ${baseWhere} AND targets_independent = 0`)
+      .run(...targetValues, ...baseParams);
+  }
+  // Propagate other fields (notes, flags) to all linked slots regardless of independence
+  if (otherUpdates.length > 0) {
+    db.prepare(`UPDATE day_exercises SET ${otherUpdates.join(', ')} WHERE ${baseWhere}`)
+      .run(...otherValues, ...baseParams);
+  }
 }
 
 function getTemplatesForExercise(exerciseId) {
@@ -667,6 +771,18 @@ function getTemplatesForExercise(exerciseId) {
     WHERE de.exercise_id = ? AND de.archived = 0
     ORDER BY d.name
   `).all(exerciseId);
+}
+
+function getLinkedSlotTargets(dayExerciseId) {
+  const de = db.prepare('SELECT exercise_id, day_id, is_warmup FROM day_exercises WHERE id = ?').get(dayExerciseId);
+  if (!de) return [];
+  return db.prepare(`
+    SELECT de.id, de.target_sets, de.target_reps, de.targets_independent, d.name as template_name
+    FROM day_exercises de
+    JOIN days d ON d.id = de.day_id
+    WHERE de.exercise_id = ? AND de.id != ? AND de.day_id != ? AND de.is_warmup = ? AND de.archived = 0
+    ORDER BY d.name
+  `).all(de.exercise_id, dayExerciseId, de.day_id, de.is_warmup);
 }
 
 function getLinkedInfoForTemplate(templateId) {
@@ -768,14 +884,19 @@ function getWorkoutsInRange(fromDate, toDate) {
 // --- Trend / Progress helpers ---
 
 function getPerformedExercises() {
-  // All exercises that have at least one completed set, excluding warmups
+  // All effective exercises with at least one completed set, excluding warmups.
+  // If a workout exercise was swapped, attribute it to the override exercise.
+  // last_date = most recent workout date for the exercise (for the Strength picker).
   return db.prepare(`
-    SELECT DISTINCT e.id, e.name
-    FROM exercises e
-    JOIN day_exercises de ON de.exercise_id = e.id AND de.is_warmup = 0
-    JOIN workout_exercises we ON we.day_exercise_id = de.id AND we.skipped = 0
+    SELECT effective.id, effective.name, MAX(w.date) as last_date
+    FROM workout_exercises we
+    JOIN day_exercises de ON de.id = we.day_exercise_id AND de.is_warmup = 0
     JOIN workout_sets ws ON ws.workout_exercise_id = we.id AND ws.completed = 1
-    ORDER BY e.name
+    JOIN exercises effective ON effective.id = COALESCE(we.override_exercise_id, de.exercise_id)
+    JOIN workouts w ON w.id = we.workout_id
+    WHERE we.skipped = 0
+    GROUP BY effective.id, effective.name
+    ORDER BY effective.name
   `).all();
 }
 
@@ -790,7 +911,9 @@ function getExerciseTrend(exerciseId) {
     JOIN workouts w ON w.id = we.workout_id
     JOIN day_exercises de ON de.id = we.day_exercise_id
     JOIN workout_sets ws ON ws.workout_exercise_id = we.id
-    WHERE de.exercise_id = ? AND de.is_warmup = 0 AND we.skipped = 0
+    WHERE COALESCE(we.override_exercise_id, de.exercise_id) = ?
+      AND de.is_warmup = 0
+      AND we.skipped = 0
     ORDER BY w.date ASC, ws.set_number ASC
   `).all(exerciseId);
 
@@ -826,8 +949,8 @@ function getExerciseTrend(exerciseId) {
   return result;
 }
 
-function getAllWorkoutDatesDistinct() {
-  return db.prepare('SELECT DISTINCT date FROM workouts ORDER BY date ASC').all().map(r => r.date);
+function getAllWorkoutSessionDates() {
+  return db.prepare('SELECT date FROM workouts ORDER BY date ASC, id ASC').all().map(r => r.date);
 }
 
 // --- Body weight helpers ---
@@ -885,6 +1008,7 @@ module.exports = {
   // Template management
   getAllTemplates,
   createTemplate,
+  duplicateTemplate,
   updateTemplate,
   deleteTemplate,
   // Schedule management
@@ -924,6 +1048,7 @@ module.exports = {
   syncLinkedExercises,
   getTemplatesForExercise,
   getLinkedInfoForTemplate,
+  getLinkedSlotTargets,
   getMostRecentExerciseData,
   // History helpers
   getExerciseHistory,
@@ -938,5 +1063,5 @@ module.exports = {
   // Trend / Progress helpers
   getPerformedExercises,
   getExerciseTrend,
-  getAllWorkoutDatesDistinct,
+  getAllWorkoutSessionDates,
 };

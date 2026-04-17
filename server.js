@@ -30,6 +30,36 @@ function todayISO() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function getBackupStatus() {
+  const fs = require('fs');
+  const backupDir = path.join(__dirname, 'data', 'backups');
+  const files = fs.existsSync(backupDir)
+    ? fs.readdirSync(backupDir)
+        .filter(name => /^workouts-\d{4}-\d{2}-\d{2}\.db$/.test(name))
+        .sort()
+    : [];
+
+  const now = new Date();
+  const jsDay = now.getDay();
+  const diffToMonday = jsDay === 0 ? -6 : 1 - jsDay;
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + diffToMonday);
+  monday.setHours(0, 0, 0, 0);
+  const currentWeek = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`;
+  const expectedName = `workouts-${currentWeek}.db`;
+  const latestName = files.length > 0 ? files[files.length - 1] : null;
+  const latestPath = latestName ? path.join(backupDir, latestName) : null;
+  const latestStat = latestPath && fs.existsSync(latestPath) ? fs.statSync(latestPath) : null;
+
+  return {
+    has_backup: files.length > 0,
+    current_week: currentWeek,
+    current_week_exists: files.includes(expectedName),
+    latest_file: latestName,
+    latest_created_at: latestStat ? latestStat.mtime.toISOString() : null,
+  };
+}
+
 // --- Template API ---
 
 app.get('/api/templates', (req, res) => {
@@ -41,6 +71,15 @@ app.post('/api/templates', (req, res) => {
   if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });
   const id = db.createTemplate(name.trim());
   res.json({ id });
+});
+
+app.post('/api/templates/:id/duplicate', (req, res) => {
+  const templateId = parseInt(req.params.id);
+  const { name } = req.body || {};
+  // Name is optional; the DB helper picks a clean "Name Copy"/"Name Copy 2"
+  // when it's missing or collides.
+  const result = db.duplicateTemplate(templateId, name);
+  res.json(result);
 });
 
 app.put('/api/templates/:id', (req, res) => {
@@ -125,6 +164,10 @@ app.get('/api/day-exercises/:id/linked', (req, res) => {
   if (!de) return res.status(404).json({ error: 'Not found' });
   const templates = db.getTemplatesForExercise(de.exercise_id).filter(t => t.id !== de.day_id);
   res.json(templates);
+});
+
+app.get('/api/day-exercises/:id/linked-targets', (req, res) => {
+  res.json(db.getLinkedSlotTargets(parseInt(req.params.id)));
 });
 
 app.delete('/api/day-exercises/:id', (req, res) => {
@@ -437,6 +480,30 @@ app.delete('/api/body-weight/:date', (req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/api/backup/status', (req, res) => {
+  res.json(getBackupStatus());
+});
+
+app.get('/api/export/json', (req, res) => {
+  const sqlite = db.getDb();
+  const exportData = {
+    exported_at: new Date().toISOString(),
+    app: 'simple-workout-tracker',
+    templates: sqlite.prepare('SELECT * FROM days ORDER BY id').all(),
+    schedule: sqlite.prepare('SELECT * FROM schedule ORDER BY id').all(),
+    exercises: sqlite.prepare('SELECT * FROM exercises ORDER BY id').all(),
+    template_exercises: sqlite.prepare('SELECT * FROM day_exercises ORDER BY day_id, sort_order, id').all(),
+    workouts: sqlite.prepare('SELECT * FROM workouts ORDER BY date, id').all(),
+    workout_exercises: sqlite.prepare('SELECT * FROM workout_exercises ORDER BY workout_id, sort_order, id').all(),
+    workout_sets: sqlite.prepare('SELECT * FROM workout_sets ORDER BY workout_exercise_id, set_number, id').all(),
+    body_weights: sqlite.prepare('SELECT * FROM body_weights ORDER BY date, id').all(),
+  };
+
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="workout-tracker-export-${todayISO()}.json"`);
+  res.send(JSON.stringify(exportData, null, 2));
+});
+
 // --- Progress / Trend API ---
 
 app.get('/api/exercises/performed', (req, res) => {
@@ -448,7 +515,7 @@ app.get('/api/trends/exercise/:id', (req, res) => {
 });
 
 app.get('/api/trends/frequency', (req, res) => {
-  res.json(db.getAllWorkoutDatesDistinct());
+  res.json(db.getAllWorkoutSessionDates());
 });
 
 // --- Graceful shutdown ---
