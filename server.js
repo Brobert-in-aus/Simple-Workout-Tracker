@@ -166,6 +166,10 @@ app.get('/api/day-exercises/:id/linked', (req, res) => {
   res.json(templates);
 });
 
+app.get('/api/day-exercises/:id/linked-targets', (req, res) => {
+  res.json(db.getLinkedSlotTargets(parseInt(req.params.id)));
+});
+
 app.delete('/api/day-exercises/:id', (req, res) => {
   db.deleteDayExercise(parseInt(req.params.id));
   res.json({ ok: true });

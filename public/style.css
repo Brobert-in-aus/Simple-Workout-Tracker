@@ -1439,10 +1439,49 @@ html, body {
 
 /* --- Linked exercise indicator --- */
 .linked-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   color: var(--accent);
   margin-top: 2px;
   opacity: 0.85;
+}
+
+.linked-indicator.targets-independent {
+  color: var(--text-dim);
+  opacity: 1;
+}
+
+.sync-chain-icon {
+  flex-shrink: 0;
+}
+
+/* --- Sync targets toggle button in inline edit form --- */
+.sync-targets-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid;
+  cursor: pointer;
+  background: transparent;
+  transition: color 0.15s, border-color 0.15s;
+  line-height: 1.2;
+  margin-bottom: 2px;
+}
+
+.sync-targets-btn.is-synced {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.sync-targets-btn.is-independent {
+  color: var(--text-dim);
+  border-color: var(--border);
 }
 
 /* --- Archived (soft-deleted) exercises in template editor --- */
@@ -1817,6 +1856,17 @@ html, body {
   opacity: 0.88;
 }
 
+.chart-bar-selected {
+  fill: var(--accent);
+  opacity: 1;
+  filter: brightness(1.1);
+}
+
+.chart-hit-target {
+  fill: transparent;
+  cursor: pointer;
+}
+
 .chart-label {
   fill: var(--text-dim);
   font-size: 9px;
@@ -2057,4 +2107,55 @@ html, body {
 
 .progress-history-list.hidden {
   display: none;
+}
+
+/* Week detail panel (Workouts bar tap) */
+
+.week-detail-panel {
+  background: var(--bg-card);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.week-detail-panel.hidden {
+  display: none;
+}
+
+.week-detail-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  padding: 10px 14px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.week-detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.week-detail-date {
+  font-size: 14px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.week-detail-templates {
+  font-size: 14px;
+  color: var(--accent);
+  font-weight: 500;
+  text-align: right;
+}
+
+.week-detail-empty {
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-dim);
+  padding: 16px;
 }

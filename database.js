@@ -147,6 +147,13 @@ function initSchema() {
     db.exec("ALTER TABLE day_exercises ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
   }
 
+  // Migration: add targets_independent flag to day_exercises (per-slot opt-out from target sync)
+  try {
+    db.prepare("SELECT targets_independent FROM day_exercises LIMIT 1").get();
+  } catch (e) {
+    db.exec("ALTER TABLE day_exercises ADD COLUMN targets_independent INTEGER NOT NULL DEFAULT 0");
+  }
+
   // Migration: populate schedule table from days if schedule is empty
   const scheduleCount = db.prepare("SELECT COUNT(*) as c FROM schedule").get().c;
   if (scheduleCount === 0) {
@@ -282,9 +289,9 @@ function duplicateTemplate(id, name) {
       INSERT INTO day_exercises (
         day_id, exercise_id, target_sets, target_reps, sort_order, notes,
         superset_group, is_warmup, is_duration, is_amrap, amrap_last_only,
-        is_adhoc, archived
+        is_adhoc, archived, targets_independent
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
     `);
 
     for (const ex of exercises) {
@@ -299,7 +306,8 @@ function duplicateTemplate(id, name) {
         ex.is_warmup ? 1 : 0,
         ex.is_duration ? 1 : 0,
         ex.is_amrap ? 1 : 0,
-        ex.amrap_last_only ? 1 : 0
+        ex.amrap_last_only ? 1 : 0,
+        ex.targets_independent ? 1 : 0
       );
     }
 
@@ -418,7 +426,7 @@ function getDayExercises(dayId, includeAdhoc = false) {
 }
 
 function updateDayExercise(id, fields) {
-  const allowed = ['target_sets', 'target_reps', 'sort_order', 'notes', 'superset_group', 'exercise_id', 'is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only'];
+  const allowed = ['target_sets', 'target_reps', 'sort_order', 'notes', 'superset_group', 'exercise_id', 'is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'targets_independent'];
   const updates = [];
   const values = [];
   for (const [key, val] of Object.entries(fields)) {
@@ -720,23 +728,39 @@ function reorderWorkoutExercises(workoutId, orderedIds) {
 // --- Exercise linking helpers ---
 
 function syncLinkedExercises(dayExerciseId, fields) {
-  const de = db.prepare('SELECT exercise_id, day_id, is_warmup FROM day_exercises WHERE id = ?').get(dayExerciseId);
+  const de = db.prepare('SELECT exercise_id, day_id, is_warmup, targets_independent FROM day_exercises WHERE id = ?').get(dayExerciseId);
   if (!de) return;
   const syncable = ['target_sets', 'target_reps', 'is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'notes'];
-  const updates = [];
-  const values = [];
+  const targetFields = new Set(['target_sets', 'target_reps']);
+
+  const targetUpdates = [], targetValues = [];
+  const otherUpdates = [], otherValues = [];
+
   for (const [key, val] of Object.entries(fields)) {
-    if (syncable.includes(key)) {
-      updates.push(`${key} = ?`);
-      values.push(val);
+    if (!syncable.includes(key)) continue;
+    if (targetFields.has(key)) {
+      if (de.targets_independent) continue; // source slot is independent — don't propagate targets
+      targetUpdates.push(`${key} = ?`);
+      targetValues.push(val);
+    } else {
+      otherUpdates.push(`${key} = ?`);
+      otherValues.push(val);
     }
   }
-  if (updates.length === 0) return;
-  // Only sync across different templates, matching by role (warmup↔warmup, main↔main)
-  // This prevents a warmup in one template from overwriting a main set in another.
-  // Skip archived rows so soft-deleted exercises aren't silently un-updated.
-  values.push(de.exercise_id, dayExerciseId, de.day_id, de.is_warmup);
-  db.prepare(`UPDATE day_exercises SET ${updates.join(', ')} WHERE exercise_id = ? AND id != ? AND day_id != ? AND is_warmup = ? AND archived = 0`).run(...values);
+
+  const baseWhere = 'exercise_id = ? AND id != ? AND day_id != ? AND is_warmup = ? AND archived = 0';
+  const baseParams = [de.exercise_id, dayExerciseId, de.day_id, de.is_warmup];
+
+  // Propagate target fields only to non-independent destination slots
+  if (targetUpdates.length > 0) {
+    db.prepare(`UPDATE day_exercises SET ${targetUpdates.join(', ')} WHERE ${baseWhere} AND targets_independent = 0`)
+      .run(...targetValues, ...baseParams);
+  }
+  // Propagate other fields (notes, flags) to all linked slots regardless of independence
+  if (otherUpdates.length > 0) {
+    db.prepare(`UPDATE day_exercises SET ${otherUpdates.join(', ')} WHERE ${baseWhere}`)
+      .run(...otherValues, ...baseParams);
+  }
 }
 
 function getTemplatesForExercise(exerciseId) {
@@ -747,6 +771,18 @@ function getTemplatesForExercise(exerciseId) {
     WHERE de.exercise_id = ? AND de.archived = 0
     ORDER BY d.name
   `).all(exerciseId);
+}
+
+function getLinkedSlotTargets(dayExerciseId) {
+  const de = db.prepare('SELECT exercise_id, day_id, is_warmup FROM day_exercises WHERE id = ?').get(dayExerciseId);
+  if (!de) return [];
+  return db.prepare(`
+    SELECT de.id, de.target_sets, de.target_reps, de.targets_independent, d.name as template_name
+    FROM day_exercises de
+    JOIN days d ON d.id = de.day_id
+    WHERE de.exercise_id = ? AND de.id != ? AND de.day_id != ? AND de.is_warmup = ? AND de.archived = 0
+    ORDER BY d.name
+  `).all(de.exercise_id, dayExerciseId, de.day_id, de.is_warmup);
 }
 
 function getLinkedInfoForTemplate(templateId) {
@@ -1012,6 +1048,7 @@ module.exports = {
   syncLinkedExercises,
   getTemplatesForExercise,
   getLinkedInfoForTemplate,
+  getLinkedSlotTargets,
   getMostRecentExerciseData,
   // History helpers
   getExerciseHistory,
