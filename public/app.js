@@ -6,6 +6,7 @@ let saveTimers = {};
 let scheduleCache = null;
 let templatesCache = null;
 let backupStatusCache = null;
+const STRENGTH_FAVORITES_KEY = 'strengthFavoriteExerciseIds';
 
 // --- Helpers ---
 function todayStr() {
@@ -143,6 +144,29 @@ async function getTemplates() {
 
 function invalidateTemplatesCache() {
   templatesCache = null;
+}
+
+function getStrengthFavoriteIds() {
+  try {
+    const raw = localStorage.getItem(STRENGTH_FAVORITES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(Number).filter(Number.isInteger) : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function setStrengthFavoriteIds(ids) {
+  localStorage.setItem(STRENGTH_FAVORITES_KEY, JSON.stringify([...new Set(ids)]));
+}
+
+function toggleStrengthFavorite(id) {
+  const current = new Set(getStrengthFavoriteIds());
+  if (current.has(id)) current.delete(id);
+  else current.add(id);
+  setStrengthFavoriteIds([...current]);
+  return current.has(id);
 }
 
 async function getBackupStatus() {
@@ -2071,6 +2095,52 @@ function countWeeksInRange(start, end) {
   return Math.max(1, Math.ceil((diffMs + 1) / (7 * 24 * 60 * 60 * 1000)));
 }
 
+function toChartTime(iso) {
+  return new Date(`${iso}T00:00:00`).getTime();
+}
+
+function getNiceStep(rawStep) {
+  if (!isFinite(rawStep) || rawStep <= 0) return 1;
+  const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+  const normalized = rawStep / magnitude;
+  if (normalized <= 1) return magnitude;
+  if (normalized <= 2) return 2 * magnitude;
+  if (normalized <= 5) return 5 * magnitude;
+  return 10 * magnitude;
+}
+
+function buildNiceTicks(minValue, maxValue, targetCount = 4) {
+  if (minValue === maxValue) {
+    if (minValue === 0) return [0, 1];
+    const pad = Math.abs(minValue) * 0.1 || 1;
+    return [minValue - pad, minValue, minValue + pad];
+  }
+
+  const rawStep = (maxValue - minValue) / Math.max(1, targetCount - 1);
+  const step = getNiceStep(rawStep);
+  const niceMin = Math.floor(minValue / step) * step;
+  const niceMax = Math.ceil(maxValue / step) * step;
+  const ticks = [];
+  for (let value = niceMin; value <= niceMax + step * 0.5; value += step) {
+    ticks.push(Number(value.toFixed(10)));
+  }
+  return ticks;
+}
+
+function pickDateTicks(points, targetCount = 4) {
+  if (points.length <= 1) return points.map(p => p.date);
+  const lastIndex = points.length - 1;
+  const indexes = new Set([0, lastIndex]);
+  const step = lastIndex / Math.max(1, targetCount - 1);
+  for (let i = 1; i < targetCount - 1; i++) {
+    indexes.add(Math.round(i * step));
+  }
+  return [...indexes]
+    .sort((a, b) => a - b)
+    .map(i => points[i].date)
+    .filter((date, idx, arr) => arr.indexOf(date) === idx);
+}
+
 // Build a responsive SVG line chart.
 // points: [{date, value}] sorted oldest→newest
 // opts: { formatY, lineClass, emptyMsg }
@@ -2079,72 +2149,70 @@ function buildLineChart(points, opts = {}) {
   if (points.length === 0) {
     return `<div class="chart-empty">${opts.emptyMsg || 'Not enough data'}</div>`;
   }
-  const W = 320, H = 110;
-  const pt = 10, pb = 22, pl = 38, pr = 8;
-  const plotW = W - pl - pr, plotH = H - pt - pb;
 
-  const values = points.map(p => p.value);
-  const minV = Math.min(...values);
-  const maxV = Math.max(...values);
-  const vRange = maxV - minV || 1;
-
-  const n = points.length;
-  const toX = i => pl + (i / (n - 1)) * plotW;
-  const toY = v => pt + (1 - (v - minV) / vRange) * plotH;
+  const W = opts.width || 360;
+  const H = opts.height || 150;
+  const pt = 14, pb = 30, pl = 44, pr = 12;
+  const plotW = W - pl - pr;
+  const plotH = H - pt - pb;
   const dotFilter = typeof opts.dotFilter === 'function'
     ? opts.dotFilter
     : ((point, index, allPoints) => allPoints.length <= 40);
   const dotClass = opts.dotClass || 'chart-dot';
+  const formatY = opts.formatY || (v => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v)));
 
-  if (points.length === 1) {
-    const x = pl + plotW / 2;
-    const y = pt + plotH / 2;
-    const fmtSingle = opts.formatY || (v => String(Math.round(v)));
+  const values = points.map(p => p.value);
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  const yTicks = buildNiceTicks(rawMin, rawMax, 4);
+  const yMin = yTicks[0];
+  const yMax = yTicks[yTicks.length - 1];
+  const yRange = yMax - yMin || 1;
+
+  const times = points.map(p => toChartTime(p.date));
+  const xMin = Math.min(...times);
+  const xMax = Math.max(...times);
+  const xRange = xMax - xMin || 1;
+
+  const toX = time => points.length === 1
+    ? pl + plotW / 2
+    : pl + ((time - xMin) / xRange) * plotW;
+  const toY = value => pt + (1 - ((value - yMin) / yRange)) * plotH;
+
+  const linePath = points.map((point, index) => {
+    const x = toX(times[index]).toFixed(1);
+    const y = toY(point.value).toFixed(1);
+    return `${index === 0 ? 'M' : 'L'}${x},${y}`;
+  }).join(' ');
+  const areaPath = `${linePath} L${toX(times[times.length - 1]).toFixed(1)},${(pt + plotH).toFixed(1)} L${toX(times[0]).toFixed(1)},${(pt + plotH).toFixed(1)} Z`;
+
+  const yGrid = yTicks.map(tick => {
+    const y = toY(tick).toFixed(1);
     return `
-      <svg class="progress-chart-svg" viewBox="0 0 ${W} ${H}"
-           preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-        <text x="${pl - 3}" y="${pt + 4}" class="chart-label" text-anchor="end">${fmtSingle(points[0].value)}</text>
-        <text x="${pl}" y="${H}" class="chart-label" text-anchor="start">${formatDateShort(points[0].date)}</text>
-        ${dotFilter(points[0], 0, points) ? `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" class="${dotClass}"/>` : ''}
-      </svg>
+      <line x1="${pl}" y1="${y}" x2="${W - pr}" y2="${y}" class="chart-grid-line"/>
+      <text x="${pl - 6}" y="${Number(y) + 3}" class="chart-label" text-anchor="end">${formatY(tick)}</text>
     `;
-  }
+  }).join('');
 
-  const pathD = opts.mode === 'step-after'
-    ? (() => {
-        let path = `M${toX(0).toFixed(1)},${toY(points[0].value).toFixed(1)}`;
-        for (let i = 0; i < n - 1; i++) {
-          path += ` L${toX(i + 1).toFixed(1)},${toY(points[i].value).toFixed(1)}`;
-          path += ` L${toX(i + 1).toFixed(1)},${toY(points[i + 1].value).toFixed(1)}`;
-        }
-        return path;
-      })()
-    : points.map((p, i) =>
-        `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(p.value).toFixed(1)}`
-      ).join(' ');
+  const xLabels = pickDateTicks(points, 4).map(date => {
+    const x = toX(toChartTime(date)).toFixed(1);
+    return `<text x="${x}" y="${H - 6}" class="chart-label" text-anchor="middle">${formatDateShort(date)}</text>`;
+  }).join('');
 
-  const dots = points.map((p, i) =>
-    dotFilter(p, i, points)
-      ? `<circle cx="${toX(i).toFixed(1)}" cy="${toY(p.value).toFixed(1)}" r="2.8" class="${dotClass}"/>`
-      : ''
-  ).join('');
-
-  const fmt = opts.formatY || (v => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v)));
-  const yLabelMax = fmt(maxV);
-  const yLabelMin = fmt(minV);
-  const xFirst = formatDateShort(points[0].date);
-  const xLast  = formatDateShort(points[n - 1].date);
+  const dots = points.map((point, index) => {
+    if (!dotFilter(point, index, points)) return '';
+    return `<circle cx="${toX(times[index]).toFixed(1)}" cy="${toY(point.value).toFixed(1)}" r="3.2" class="${dotClass}"/>`;
+  }).join('');
 
   return `
     <svg class="progress-chart-svg" viewBox="0 0 ${W} ${H}"
          preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-      <text x="${pl - 3}" y="${pt + 4}" class="chart-label" text-anchor="end">${yLabelMax}</text>
-      <text x="${pl - 3}" y="${pt + plotH + 4}" class="chart-label" text-anchor="end">${yLabelMin}</text>
-      <text x="${pl}" y="${H}" class="chart-label" text-anchor="start">${xFirst}</text>
-      <text x="${W - pr}" y="${H}" class="chart-label" text-anchor="end">${xLast}</text>
-      <path d="${pathD}" class="chart-line ${opts.lineClass || ''}"
+      ${yGrid}
+      <path d="${areaPath}" class="chart-area ${opts.lineClass || ''}"/>
+      <path d="${linePath}" class="chart-line ${opts.lineClass || ''}"
             fill="none" stroke-linejoin="round" stroke-linecap="round"/>
       ${dots}
+      ${xLabels}
     </svg>
   `;
 }
@@ -2154,31 +2222,47 @@ function buildLineChart(points, opts = {}) {
 // Returns an HTML string (svg or empty-state div).
 function buildBarChart(bars, opts = {}) {
   if (bars.length === 0) return `<div class="chart-empty">No data</div>`;
-  const W = 320, H = opts.height || 90;
-  const pt = 6, pb = 20, pl = 24, pr = 8;
-  const plotW = W - pl - pr, plotH = H - pt - pb;
 
-  const maxV = Math.max(...bars.map(b => b.value), 1);
+  const W = opts.width || 360;
+  const H = opts.height || 130;
+  const pt = 14, pb = 30, pl = 34, pr = 12;
+  const plotW = W - pl - pr;
+  const plotH = H - pt - pb;
+  const values = bars.map(b => b.value);
+  const yTicks = buildNiceTicks(0, Math.max(...values, 1), 4);
+  const yMax = yTicks[yTicks.length - 1] || 1;
   const gap = plotW / bars.length;
-  const barW = Math.max(2, gap - 2);
+  const barW = Math.max(4, Math.min(18, gap * 0.72));
 
-  const rects = bars.map((b, i) => {
-    const bH = (b.value / maxV) * plotH;
-    const x = pl + i * gap + (gap - barW) / 2;
-    const y = pt + plotH - bH;
+  const yGrid = yTicks.map(tick => {
+    const y = pt + (1 - (tick / yMax)) * plotH;
+    return `
+      <line x1="${pl}" y1="${y.toFixed(1)}" x2="${W - pr}" y2="${y.toFixed(1)}" class="chart-grid-line"/>
+      <text x="${pl - 6}" y="${(y + 3).toFixed(1)}" class="chart-label" text-anchor="end">${Math.round(tick)}</text>
+    `;
+  }).join('');
+
+  const rects = bars.map((bar, index) => {
+    const barH = (bar.value / yMax) * plotH;
+    const x = pl + index * gap + (gap - barW) / 2;
+    const y = pt + plotH - barH;
     return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}"
-                  width="${barW.toFixed(1)}" height="${Math.max(bH, 1).toFixed(1)}"
-                  class="chart-bar" rx="1"/>`;
+                  width="${barW.toFixed(1)}" height="${Math.max(barH, 1).toFixed(1)}"
+                  class="chart-bar" rx="2"/>`;
+  }).join('');
+
+  const labelIndexes = new Set([0, Math.floor((bars.length - 1) / 2), bars.length - 1]);
+  const xLabels = [...labelIndexes].sort((a, b) => a - b).map(index => {
+    const x = pl + index * gap + gap / 2;
+    return `<text x="${x.toFixed(1)}" y="${H - 6}" class="chart-label" text-anchor="middle">${bars[index].label}</text>`;
   }).join('');
 
   return `
     <svg class="progress-chart-svg" viewBox="0 0 ${W} ${H}"
          preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-      <text x="${pl - 2}" y="${pt + 4}" class="chart-label" text-anchor="end">${maxV}</text>
-      <text x="${pl - 2}" y="${pt + plotH + 4}" class="chart-label" text-anchor="end">0</text>
-      <text x="${pl}" y="${H}" class="chart-label" text-anchor="start">${bars[0].label}</text>
-      <text x="${W - pr}" y="${H}" class="chart-label" text-anchor="end">${bars[bars.length - 1].label}</text>
+      ${yGrid}
       ${rects}
+      ${xLabels}
     </svg>
   `;
 }
@@ -2409,6 +2493,11 @@ function wireBodyHistoryInputs(historyContainer, sectionContainer) {
 }
 
 function compareExerciseSearchResults(a, b, query) {
+  const favorites = new Set(getStrengthFavoriteIds());
+  const aFav = favorites.has(a.id);
+  const bFav = favorites.has(b.id);
+  if (aFav !== bFav) return aFav ? -1 : 1;
+
   const aName = a.name.toLowerCase();
   const bName = b.name.toLowerCase();
   const aStarts = aName.startsWith(query);
@@ -2462,6 +2551,7 @@ async function renderStrengthSection(container) {
 
   container.innerHTML = `
     <div class="exercise-picker-card">
+      <div class="exercise-favorites-row hidden"></div>
       <input type="text" class="exercise-search-input" placeholder="Search exercise…"
              value="${progressExerciseName}" autocomplete="off" autocorrect="off" spellcheck="false">
       <div class="exercise-search-results hidden"></div>
@@ -2469,38 +2559,104 @@ async function renderStrengthSection(container) {
     <div class="strength-chart-area"></div>
   `;
 
+  const favoritesRow  = container.querySelector('.exercise-favorites-row');
   const searchInput   = container.querySelector('.exercise-search-input');
   const searchResults = container.querySelector('.exercise-search-results');
   const chartArea     = container.querySelector('.strength-chart-area');
 
   attachFirstTapCursorEnd(searchInput);
 
-  searchInput.addEventListener('input', () => {
+  const renderFavorites = () => {
+    const favoriteIds = new Set(getStrengthFavoriteIds());
+    const favorites = exercises
+      .filter(e => favoriteIds.has(e.id))
+      .sort((a, b) => {
+        const aDate = a.last_date || '';
+        const bDate = b.last_date || '';
+        if (aDate !== bDate) return bDate.localeCompare(aDate);
+        return a.name.localeCompare(b.name);
+      })
+      .slice(0, 8);
+
+    if (favorites.length === 0) {
+      favoritesRow.classList.add('hidden');
+      favoritesRow.innerHTML = '';
+      return;
+    }
+
+    favoritesRow.innerHTML = favorites.map(e => `
+      <button type="button" class="favorite-chip" data-id="${e.id}" data-name="${e.name}">
+        <span class="favorite-chip-star">★</span>
+        <span class="favorite-chip-name">${e.name}</span>
+      </button>
+    `).join('');
+    favoritesRow.classList.remove('hidden');
+  };
+
+  const renderResults = () => {
     const q = searchInput.value.toLowerCase().trim();
-    if (!q) { searchResults.classList.add('hidden'); searchResults.innerHTML = ''; return; }
+    if (!q) {
+      searchResults.classList.add('hidden');
+      searchResults.innerHTML = '';
+      return;
+    }
+
+    const favoriteIds = new Set(getStrengthFavoriteIds());
     const matches = exercises
       .filter(e => e.name.toLowerCase().includes(q))
       .sort((a, b) => compareExerciseSearchResults(a, b, q))
       .slice(0, 12);
-    if (matches.length === 0) { searchResults.classList.add('hidden'); return; }
+
+    if (matches.length === 0) {
+      searchResults.classList.add('hidden');
+      searchResults.innerHTML = '';
+      return;
+    }
+
     searchResults.innerHTML = matches.map(e =>
       `<div class="exercise-result-item" data-id="${e.id}" data-name="${e.name}">
         <span class="result-name">${e.name}</span>
         ${e.last_date ? `<span class="result-last-date">${formatDateShort(e.last_date)}</span>` : ''}
+        <button type="button" class="result-favorite-btn${favoriteIds.has(e.id) ? ' active' : ''}" data-id="${e.id}" aria-label="Toggle favorite">★</button>
       </div>`
     ).join('');
     searchResults.classList.remove('hidden');
-  });
+  };
 
-  searchResults.addEventListener('click', async e => {
-    const item = e.target.closest('.exercise-result-item');
-    if (!item) return;
-    progressExerciseId   = parseInt(item.dataset.id);
-    progressExerciseName = item.dataset.name;
-    searchInput.value    = item.dataset.name;
+  const selectExercise = async (id, name) => {
+    progressExerciseId   = parseInt(id);
+    progressExerciseName = name;
+    searchInput.value    = name;
     searchResults.classList.add('hidden');
     searchResults.innerHTML = '';
     await renderStrengthChart(chartArea);
+  };
+
+  renderFavorites();
+
+  searchInput.addEventListener('input', () => {
+    renderResults();
+  });
+
+  searchResults.addEventListener('click', async e => {
+    const favoriteBtn = e.target.closest('.result-favorite-btn');
+    if (favoriteBtn) {
+      e.stopPropagation();
+      toggleStrengthFavorite(parseInt(favoriteBtn.dataset.id));
+      renderFavorites();
+      renderResults();
+      return;
+    }
+
+    const item = e.target.closest('.exercise-result-item');
+    if (!item) return;
+    await selectExercise(item.dataset.id, item.dataset.name);
+  });
+
+  favoritesRow.addEventListener('click', async e => {
+    const chip = e.target.closest('.favorite-chip');
+    if (!chip) return;
+    await selectExercise(chip.dataset.id, chip.dataset.name);
   });
 
   // Close results when clicking outside

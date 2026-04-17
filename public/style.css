@@ -1781,14 +1781,27 @@ html, body {
 }
 
 /* Chart elements */
+.chart-grid-line {
+  stroke: rgba(24, 35, 70, 0.12);
+  stroke-width: 1;
+}
+
 .chart-line {
   stroke: var(--accent);
-  stroke-width: 2;
+  stroke-width: 2.5;
+}
+
+.chart-area {
+  fill: rgba(30, 11, 129, 0.08);
 }
 
 .chart-line-secondary {
   stroke: var(--olive);
-  stroke-width: 2;
+  stroke-width: 2.5;
+}
+
+.chart-area.chart-line-secondary {
+  fill: rgba(111, 125, 45, 0.10);
 }
 
 .chart-dot {
@@ -1801,12 +1814,12 @@ html, body {
 
 .chart-bar {
   fill: var(--accent);
-  opacity: 0.8;
+  opacity: 0.88;
 }
 
 .chart-label {
   fill: var(--text-dim);
-  font-size: 8px;
+  font-size: 9px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
@@ -1862,6 +1875,40 @@ html, body {
   position: relative;
 }
 
+.exercise-favorites-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.favorite-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.favorite-chip:active {
+  background: var(--border);
+}
+
+.favorite-chip-star {
+  color: var(--accent);
+  line-height: 1;
+}
+
+.favorite-chip-name {
+  white-space: nowrap;
+}
+
 .exercise-search-input {
   width: 100%;
   border: none;
@@ -1913,6 +1960,21 @@ html, body {
   color: var(--text-muted);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+.result-favorite-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.result-favorite-btn.active {
+  color: var(--accent);
 }
 
 .exercise-result-item:last-child {
