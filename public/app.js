@@ -1819,18 +1819,19 @@ async function loadTemplateExercises(templateId, container) {
             syncBtn.className = 'sync-targets-btn is-independent';
             syncBtn.innerHTML = `${CHAIN_SVG_BROKEN}<span class="sync-targets-label">Targets independent</span>`;
           } else {
-            // Restore sync: check if current targets differ from linked slots
+            // Restore sync: check if current targets differ from linked slots.
+            // All linked slots are independent by this point (breaking sync broadcasts
+            // to all slots), so compare against ALL of them.
             const linked = await api(`/api/day-exercises/${deId}/linked-targets`);
-            const syncedLinked = linked.filter(l => !l.targets_independent);
-            const differ = syncedLinked.some(l => l.target_sets !== curSets || String(l.target_reps) !== curReps);
+            const differ = linked.some(l => l.target_sets !== curSets || String(l.target_reps) !== curReps);
 
-            if (differ && syncedLinked.length > 0) {
-              const templates = syncedLinked.map(l => l.template_name).join(', ');
+            if (differ && linked.length > 0) {
+              const templates = linked.map(l => l.template_name).join(', ');
               const confirmed = confirm(`This will update "${ex.exercise_name}" on ${templates} to ${curSets} sets \u00d7 ${curReps} reps. Continue?`);
               if (!confirmed) return;
             }
 
-            // Clear independence flag and propagate current targets to synced linked slots
+            // Clear independence flag and propagate current targets to all linked slots
             await api(`/api/day-exercises/${deId}`, { method: 'PUT', body: { targets_independent: 0, target_sets: curSets, target_reps: curReps } });
             targetsIndependent = 0;
             ex.targets_independent = 0;
