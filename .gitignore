@@ -8,6 +8,8 @@ data/server-log.txt
 data/workouts.db.prerecovery-*
 data/backups/
 data/OtherBackups/
+data/HealthExport/
+Workout History/
 .claude/
 NUL
 PERSONAL_IMPROVEMENTS_PLAN.md
