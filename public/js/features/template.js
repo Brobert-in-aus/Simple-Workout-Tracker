@@ -487,12 +487,14 @@ async function loadTemplateExercises(templateId, container) {
             syncBtn.innerHTML = `${CHAIN_SVG_BROKEN}<span class="sync-targets-label">Targets independent</span>`;
           } else {
             const linked = await api(`/api/day-exercises/${deId}/linked-targets`);
-            const syncedLinked = linked.filter((l) => !l.targets_independent);
-            const differ = syncedLinked.some((l) => l.target_sets !== curSets || String(l.target_reps) !== curReps);
+            // All linked slots are independent by this point (breaking sync broadcasts to
+            // all slots), so compare against ALL of them — they'll all receive the new
+            // targets when re-linking.
+            const differ = linked.some((l) => l.target_sets !== curSets || String(l.target_reps) !== curReps);
 
-            if (differ && syncedLinked.length > 0) {
-              const templatesList = syncedLinked.map((l) => l.template_name).join(', ');
-              const confirmed = confirm(`This will update "${ex.exercise_name}" on ${templatesList} to ${curSets} sets × ${curReps} reps. Continue?`);
+            if (differ && linked.length > 0) {
+              const templatesList = linked.map((l) => l.template_name).join(', ');
+              const confirmed = confirm(`This will update "${ex.exercise_name}" on ${templatesList} to ${curSets} sets \u00d7 ${curReps} reps. Continue?`);
               if (!confirmed) return;
             }
 

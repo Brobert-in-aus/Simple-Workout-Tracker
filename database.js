@@ -730,33 +730,51 @@ function reorderWorkoutExercises(workoutId, orderedIds) {
 function syncLinkedExercises(dayExerciseId, fields) {
   const de = db.prepare('SELECT exercise_id, day_id, is_warmup, targets_independent FROM day_exercises WHERE id = ?').get(dayExerciseId);
   if (!de) return;
-  const syncable = ['target_sets', 'target_reps', 'is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'notes'];
-  const targetFields = new Set(['target_sets', 'target_reps']);
-
-  const targetUpdates = [], targetValues = [];
-  const otherUpdates = [], otherValues = [];
-
-  for (const [key, val] of Object.entries(fields)) {
-    if (!syncable.includes(key)) continue;
-    if (targetFields.has(key)) {
-      if (de.targets_independent) continue; // source slot is independent — don't propagate targets
-      targetUpdates.push(`${key} = ?`);
-      targetValues.push(val);
-    } else {
-      otherUpdates.push(`${key} = ?`);
-      otherValues.push(val);
-    }
-  }
 
   const baseWhere = 'exercise_id = ? AND id != ? AND day_id != ? AND is_warmup = ? AND archived = 0';
   const baseParams = [de.exercise_id, dayExerciseId, de.day_id, de.is_warmup];
 
-  // Propagate target fields only to non-independent destination slots
-  if (targetUpdates.length > 0) {
-    db.prepare(`UPDATE day_exercises SET ${targetUpdates.join(', ')} WHERE ${baseWhere} AND targets_independent = 0`)
-      .run(...targetValues, ...baseParams);
+  // targets_independent is an all-or-nothing property: every slot of the same exercise
+  // must agree on whether targets are synced or independent. If the flag is changing,
+  // broadcast the new value to ALL linked slots FIRST — before processing anything else —
+  // so subsequent queries see the final state.
+  const independentChanging = 'targets_independent' in fields;
+  const effectiveIndependent = independentChanging
+    ? (fields.targets_independent ? 1 : 0)
+    : de.targets_independent;
+
+  if (independentChanging) {
+    db.prepare(`UPDATE day_exercises SET targets_independent = ? WHERE ${baseWhere}`)
+      .run(effectiveIndependent, ...baseParams);
   }
-  // Propagate other fields (notes, flags) to all linked slots regardless of independence
+
+  // Propagate target fields (target_sets, target_reps) only when effectively synced.
+  // Because step 1 already set targets_independent = 0 on all linked slots for the
+  // re-link case, the AND targets_independent = 0 guard now matches all of them.
+  if (!effectiveIndependent) {
+    const targetUpdates = [], targetValues = [];
+    for (const [key, val] of Object.entries(fields)) {
+      if (key === 'target_sets' || key === 'target_reps') {
+        targetUpdates.push(`${key} = ?`);
+        targetValues.push(val);
+      }
+    }
+    if (targetUpdates.length > 0) {
+      db.prepare(`UPDATE day_exercises SET ${targetUpdates.join(', ')} WHERE ${baseWhere} AND targets_independent = 0`)
+        .run(...targetValues, ...baseParams);
+    }
+  }
+
+  // Propagate other fields (notes, workout-type flags) to all linked slots regardless
+  // of independence state — these are always shared.
+  const otherSyncable = ['is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'notes'];
+  const otherUpdates = [], otherValues = [];
+  for (const [key, val] of Object.entries(fields)) {
+    if (otherSyncable.includes(key)) {
+      otherUpdates.push(`${key} = ?`);
+      otherValues.push(val);
+    }
+  }
   if (otherUpdates.length > 0) {
     db.prepare(`UPDATE day_exercises SET ${otherUpdates.join(', ')} WHERE ${baseWhere}`)
       .run(...otherValues, ...baseParams);
