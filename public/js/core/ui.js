@@ -33,13 +33,25 @@ export function moveCursorToEnd(input) {
 }
 
 export function attachFirstTapCursorEnd(input) {
-  input.addEventListener('pointerdown', (e) => {
-    if (document.activeElement !== input) {
-      e.preventDefault();
-      input.focus();
-      requestAnimationFrame(() => moveCursorToEnd(input));
-    }
-  }, { passive: false });
+  // On iOS Safari the browser places the caret at the tap position AFTER the
+  // focus event fires, overriding any cursor move we do in the focus handler.
+  // We detect a first-tap (unfocused → focused) via pointerdown, then in the
+  // focus handler defer moveCursorToEnd past the browser's own caret placement.
+  //
+  // We deliberately do NOT call e.preventDefault() here: doing so suppresses
+  // the virtual keyboard on iOS and also kills the synthesised click event,
+  // which was causing taps on the last set's empty weight input to be
+  // misattributed to the "+ Set" button below after a layout shift.
+  let pendingCursorEnd = false;
+  input.addEventListener('pointerdown', () => {
+    pendingCursorEnd = document.activeElement !== input;
+  });
+  input.addEventListener('focus', () => {
+    if (!pendingCursorEnd) return;
+    pendingCursorEnd = false;
+    // Defer past the browser's native caret-on-tap placement
+    requestAnimationFrame(() => moveCursorToEnd(input));
+  });
 }
 
 function getModalElements() {
