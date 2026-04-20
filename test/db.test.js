@@ -319,6 +319,49 @@ test('health daily metrics upsert and TDEE lookup work by date', () => {
   assert.equal(db.getDailyTdee('2026-04-20'), 2868);
 });
 
+test('macro TDEE context applies Apple Health functional strength correction factor', () => {
+  db.setAppleHealthEnergyAdjustments({ functional_strength_training_factor: 0.5 });
+  db.upsertHealthDailyMetrics({
+    date: '2026-04-21',
+    sourceType: 'apple_health',
+    activeEnergyKj: 4184,
+    restingEnergyKj: 8368,
+    activeEnergyKcal: 1000,
+    restingEnergyKcal: 2000,
+    tdeeKcal: 3000,
+    sampleCountActive: 1,
+    sampleCountResting: 1,
+    sourceFile: 'macro-context.json',
+    sourceSnapshotDate: '2026-04-22',
+  });
+  const workoutResult = db.upsertExternalWorkout({
+    sourceType: 'apple_health',
+    externalId: 'fst-correction-test',
+    workoutType: 'Functional Strength Training',
+    name: 'Functional Strength Training',
+    date: '2026-04-21',
+    startAt: '2026-04-21T07:00:00+10:00',
+    endAt: '2026-04-21T08:00:00+10:00',
+    durationSeconds: 3600,
+    isIndoor: 1,
+    locationLabel: 'Indoor',
+    sourceFile: 'macro-context.json',
+    sourceSnapshotDate: '2026-04-22',
+    matchStatus: 'imported_standalone',
+  }, 'summary');
+  db.replaceExternalWorkoutMetrics(workoutResult.id, {
+    active_energy_kcal: 400,
+  });
+
+  const context = db.getMacroTdeeContextForDate('2026-04-21');
+  assert.equal(context.active_energy_kcal_raw, 1000);
+  assert.equal(context.active_energy_adjustment_kcal, -200);
+  assert.equal(context.active_energy_kcal, 800);
+  assert.equal(context.tdee_kcal, 2800);
+  assert.equal(context.apple_health_adjustments.functional_strength_training_factor, 0.5);
+  db.setAppleHealthEnergyAdjustments({ functional_strength_training_factor: 1 });
+});
+
 test('merged history includes standalone external workouts', () => {
   const { templateId } = buildTemplate('Smoke-History-Tracked', [
     { name: 'Smoke History Lift', targetSets: 3, targetReps: '8' },

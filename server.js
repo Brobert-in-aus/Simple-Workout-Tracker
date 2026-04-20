@@ -793,13 +793,15 @@ app.get('/api/nutrition/targets', (req, res) => {
   res.json({
     workout: w ? JSON.parse(w) : empty,
     rest: r ? JSON.parse(r) : empty,
+    apple_health_adjustments: db.getAppleHealthEnergyAdjustments(),
   });
 });
 
 app.put('/api/nutrition/targets', (req, res) => {
-  const { workout, rest } = req.body;
+  const { workout, rest, apple_health_adjustments } = req.body;
   if (workout) db.setUserSetting('macro_targets_workout', JSON.stringify(workout));
   if (rest) db.setUserSetting('macro_targets_rest', JSON.stringify(rest));
+  if (apple_health_adjustments) db.setAppleHealthEnergyAdjustments(apple_health_adjustments);
   res.json({ ok: true });
 });
 

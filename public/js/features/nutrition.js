@@ -637,6 +637,7 @@ function renderSettingsModal(tmpl, tgt) {
 }
 
 function settingsBodyHTML(tmpl, tgt) {
+  const appleHealthAdjustments = tgt.apple_health_adjustments || { functional_strength_training_factor: 1 };
   return `
     <div class="settings-section">
       <h4 class="settings-section-title">Meal Templates</h4>
@@ -655,6 +656,15 @@ function settingsBodyHTML(tmpl, tgt) {
         <div class="targets-profile">
           <div class="targets-profile-label">Rest Day</div>
           ${targetFieldsHTML('rest', tgt.rest)}
+        </div>
+      </div>
+      <div class="settings-subsection">
+        <div class="targets-profile-label">Apple Health Adjustments</div>
+        <div class="target-field">
+          <label>Functional Strength Training Active Energy Factor</label>
+          <input type="number" class="target-input" data-field="functional_strength_training_factor"
+                 value="${appleHealthAdjustments.functional_strength_training_factor ?? 1}" step="0.01" min="0" max="2" inputmode="decimal">
+          <div class="target-field-hint">Use a factor below 1.00 to reduce Apple Watch active calories for strength workouts when calculating daily active energy and TDEE. Example: 0.80 counts 80%.</div>
         </div>
       </div>
       <button class="btn-save-targets" id="settings-save-targets">Save</button>
@@ -761,7 +771,12 @@ function wireSettingsModal(tmpl, tgt) {
     // Seed with existing values so hidden fields (carbs_g, fat_g) are preserved
     const workout = { ...(targets.workout || {}) };
     const rest    = { ...(targets.rest    || {}) };
+    const apple_health_adjustments = { ...(targets.apple_health_adjustments || {}) };
     document.querySelectorAll('.target-input').forEach(inp => {
+      if (!inp.dataset.profile) {
+        apple_health_adjustments[inp.dataset.field] = parseFloat(inp.value) || 0;
+        return;
+      }
       const obj = inp.dataset.profile === 'workout' ? workout : rest;
       const raw = inp.value.trim();
       // deficit_target is optional — blank means no target (null), not zero
@@ -771,8 +786,8 @@ function wireSettingsModal(tmpl, tgt) {
         obj[inp.dataset.field] = parseFloat(raw) || 0;
       }
     });
-    await api('/api/nutrition/targets', { method: 'PUT', body: { workout, rest } });
-    targets = { workout, rest };
+    await api('/api/nutrition/targets', { method: 'PUT', body: { workout, rest, apple_health_adjustments } });
+    targets = { workout, rest, apple_health_adjustments };
     showToast('Targets saved');
     // Use updateTotalsDisplay (reads from live DOM) instead of renderContent()
     // to avoid wiping in-session logged state that hasn't been written back to logData.

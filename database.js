@@ -1148,6 +1148,32 @@ function setUserSetting(key, value) {
   ).run(key, value);
 }
 
+function normalizeAppleHealthEnergyAdjustments(raw) {
+  const input = raw && typeof raw === 'object' ? raw : {};
+  let functionalStrengthTrainingFactor = Number(input.functional_strength_training_factor);
+  if (!Number.isFinite(functionalStrengthTrainingFactor)) functionalStrengthTrainingFactor = 1;
+  functionalStrengthTrainingFactor = Math.max(0, Math.min(2, functionalStrengthTrainingFactor));
+  return {
+    functional_strength_training_factor: Math.round(functionalStrengthTrainingFactor * 100) / 100,
+  };
+}
+
+function getAppleHealthEnergyAdjustments() {
+  const raw = getUserSetting('apple_health_energy_adjustments');
+  if (!raw) return normalizeAppleHealthEnergyAdjustments({});
+  try {
+    return normalizeAppleHealthEnergyAdjustments(JSON.parse(raw));
+  } catch (error) {
+    return normalizeAppleHealthEnergyAdjustments({});
+  }
+}
+
+function setAppleHealthEnergyAdjustments(adjustments) {
+  const normalized = normalizeAppleHealthEnergyAdjustments(adjustments);
+  setUserSetting('apple_health_energy_adjustments', JSON.stringify(normalized));
+  return normalized;
+}
+
 // --- Meal template helpers ---
 
 function getMealTemplates() {
@@ -1557,11 +1583,32 @@ function getRecentHealthDailyMetrics(limit = 14) {
 function getMacroTdeeContextForDate(date) {
   const row = getHealthDailyMetricsByDate(date);
   if (!row) return null;
+  const adjustments = getAppleHealthEnergyAdjustments();
+  const workoutRows = db.prepare(`
+    SELECT ew.workout_type, ewm.active_energy_kcal
+    FROM external_workouts ew
+    JOIN external_workout_metrics ewm ON ewm.external_workout_id = ew.id
+    WHERE ew.date = ? AND ewm.active_energy_kcal IS NOT NULL
+  `).all(date);
+  const activeAdjustmentKcal = workoutRows.reduce((sum, workout) => {
+    const factor = workout.workout_type === 'Functional Strength Training'
+      ? adjustments.functional_strength_training_factor
+      : 1;
+    return sum + ((workout.active_energy_kcal || 0) * factor) - (workout.active_energy_kcal || 0);
+  }, 0);
+  const activeEnergyKcal = row.active_energy_kcal == null
+    ? null
+    : Math.round((row.active_energy_kcal + activeAdjustmentKcal) * 10) / 10;
+  const tdeeKcal = ((row.resting_energy_kcal ?? 0) + (activeEnergyKcal ?? 0));
   return {
     date: row.date,
-    active_energy_kcal: row.active_energy_kcal,
+    active_energy_kcal: activeEnergyKcal,
+    active_energy_kcal_raw: row.active_energy_kcal,
+    active_energy_adjustment_kcal: Math.round(activeAdjustmentKcal * 10) / 10,
     resting_energy_kcal: row.resting_energy_kcal,
-    tdee_kcal: row.tdee_kcal,
+    tdee_kcal: Math.round(tdeeKcal * 10) / 10,
+    tdee_kcal_raw: row.tdee_kcal,
+    apple_health_adjustments: adjustments,
   };
 }
 
@@ -1661,6 +1708,8 @@ module.exports = {
   // User settings
   getUserSetting,
   setUserSetting,
+  getAppleHealthEnergyAdjustments,
+  setAppleHealthEnergyAdjustments,
   // Meal templates
   getMealTemplates,
   createMealTemplate,
