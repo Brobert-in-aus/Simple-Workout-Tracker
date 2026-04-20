@@ -525,7 +525,7 @@ app.get('/api/nutrition/templates', (req, res) => {
 });
 
 app.post('/api/nutrition/templates', (req, res) => {
-  const { name, calories_kcal, protein_g, carbs_g, fat_g, include_rest_day } = req.body;
+  const { name, calories_kcal, protein_g, carbs_g, fat_g, include_rest_day, use_defaults } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });
   const id = db.createMealTemplate({
     name: name.trim(),
@@ -534,6 +534,7 @@ app.post('/api/nutrition/templates', (req, res) => {
     carbs_g: parseFloat(carbs_g) || 0,
     fat_g: parseFloat(fat_g) || 0,
     include_rest_day: include_rest_day != null ? !!include_rest_day : true,
+    use_defaults: use_defaults ? 1 : 0,
   });
   res.json({ id });
 });
@@ -561,7 +562,8 @@ app.get('/api/nutrition/logs/:date', (req, res) => {
   const date = req.params.date;
   const logs = db.getMacroLogsForDate(date);
   const workouts = db.getWorkoutsForDate(date);
-  res.json({ logs, is_workout_day: workouts.length > 0 });
+  const tdee_kcal = db.getDailyTdee(date);
+  res.json({ logs, is_workout_day: workouts.length > 0, tdee_kcal });
 });
 
 app.post('/api/nutrition/logs', (req, res) => {

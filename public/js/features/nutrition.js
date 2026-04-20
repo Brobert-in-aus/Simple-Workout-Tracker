@@ -2,11 +2,15 @@ import { api } from '../core/api.js';
 import { todayStr } from '../core/dates.js';
 import { showToast, openAppModal } from '../core/ui.js';
 
+// Target range constants — hardcoded, not configurable
+const CAL_RANGE  = 100; // ±kcal to be considered "on target"
+const PROT_RANGE = 15;  // ±g protein to be considered "on target"
+
 // Module-level state
 let currentDate = todayStr();
 let templates = null;
 let targets = null;
-let logData = null; // { logs: [], is_workout_day: bool }
+let logData = null; // { logs: [], is_workout_day: bool, tdee_kcal: number|null }
 
 // Per-session save tracking (reset on navigation)
 let saveTimers = {};
@@ -91,7 +95,7 @@ function renderContent() {
       ${customLogs.map(log => mealCardHTML(null, log, true)).join('')}
     </div>
     <button class="btn-add-meal" id="nutr-add-custom">+ Add Custom Meal</button>
-    ${totalsHTML(totals, tgt)}
+    ${totalsHTML(totals, tgt, logData.tdee_kcal)}
     <button class="btn-link nutr-settings-btn" id="nutr-settings">&#9881; Meal Settings</button>
   `;
 
@@ -108,36 +112,70 @@ function updateDateDisplay() {
   el.textContent = currentDate === todayStr() ? `Today · ${label}` : label;
 }
 
+// --- Option A migration point ---
+// In a future Option A, this would check template.preset_id and return the linked preset's macros.
+// For now it just returns the slot's own default values.
+function getSlotDefaults(template) {
+  return {
+    calories_kcal: template.calories_kcal,
+    protein_g:     template.protein_g,
+    carbs_g:       template.carbs_g,
+    fat_g:         template.fat_g,
+  };
+}
+
 // --- HTML builders ---
 
 function mealCardHTML(template, log, isCustom) {
   const name = log ? log.meal_name : template.name;
   const logged = log != null;
-  const cal  = logged ? log.calories_kcal : (template?.calories_kcal ?? 0);
-  const prot = logged ? log.protein_g    : (template?.protein_g    ?? 0);
-  const carb = logged ? log.carbs_g      : (template?.carbs_g      ?? 0);
-  const fat  = logged ? log.fat_g        : (template?.fat_g        ?? 0);
-  const tid  = template?.id ?? '';
-  const lid  = log?.id ?? '';
+  // use_defaults only applies to non-custom template slots
+  const useDefaults = !isCustom && !!(template?.use_defaults);
+  const tid     = template?.id ?? '';
+  const lid     = log?.id ?? '';
   const sortOrd = template?.sort_order ?? (log?.sort_order ?? 0);
 
+  let summaryContent, inputCal, inputProt, inputCarb, inputFat, confirmBtn;
+
+  if (logged) {
+    const { calories_kcal: cal, protein_g: prot, carbs_g: carb, fat_g: fat } = log;
+    summaryContent = summaryHTML(cal, prot, carb, fat, true);
+    inputCal = cal; inputProt = prot; inputCarb = carb; inputFat = fat;
+    confirmBtn = useDefaults
+      ? '<button class="meal-confirm-btn confirmed" title="Logged">&#10003;</button>'
+      : '';
+  } else if (useDefaults) {
+    // Quick-confirm slot, unlogged: show dimmed defaults + confirm button
+    const d = getSlotDefaults(template);
+    summaryContent = summaryHTML(d.calories_kcal, d.protein_g, d.carbs_g, d.fat_g, false);
+    inputCal = d.calories_kcal; inputProt = d.protein_g; inputCarb = d.carbs_g; inputFat = d.fat_g;
+    confirmBtn = '<button class="meal-confirm-btn" title="Log with defaults">&#10003;</button>';
+  } else {
+    // Manual entry slot, unlogged: blank
+    summaryContent = '<span class="summary-blank">&mdash;</span>';
+    inputCal = 0; inputProt = 0; inputCarb = 0; inputFat = 0;
+    confirmBtn = '';
+  }
+
   return `
-    <div class="meal-card ${logged ? 'logged' : 'unlogged'}"
+    <div class="meal-card ${logged ? 'logged' : 'unlogged'}${useDefaults ? ' use-defaults' : ''}"
          data-template-id="${tid}"
          data-log-id="${lid}"
          data-sort-order="${sortOrd}"
-         data-is-custom="${isCustom ? '1' : '0'}">
+         data-is-custom="${isCustom ? '1' : '0'}"
+         data-use-defaults="${useDefaults ? '1' : '0'}">
       <div class="meal-card-header">
         <span class="meal-name">${name}</span>
-        <span class="meal-summary">${summaryHTML(cal, prot, carb, fat, logged)}</span>
+        <span class="meal-summary">${summaryContent}</span>
+        ${confirmBtn}
         <button class="meal-delete-btn" title="Remove">&times;</button>
       </div>
       <div class="meal-card-body hidden">
         <div class="meal-macro-inputs">
-          ${macroInputHTML('calories_kcal', 'Cal', cal)}
-          ${macroInputHTML('protein_g',     'P g', prot)}
-          ${macroInputHTML('carbs_g',       'C g', carb)}
-          ${macroInputHTML('fat_g',         'F g', fat)}
+          ${macroInputHTML('calories_kcal', 'Cal', inputCal)}
+          ${macroInputHTML('protein_g',     'P g', inputProt)}
+          ${macroInputHTML('carbs_g',       'C g', inputCarb)}
+          ${macroInputHTML('fat_g',         'F g', inputFat)}
         </div>
       </div>
     </div>`;
@@ -157,6 +195,15 @@ function summaryHTML(cal, prot, carb, fat, logged) {
   return logged ? s : `<span class="summary-dim">${s}</span>`;
 }
 
+// Returns a CSS class reflecting whether val is within ±range of target.
+// Returns '' when there's no meaningful data to compare.
+function targetClass(val, target, range) {
+  if (!target || !val) return '';
+  const diff = val - target;
+  if (Math.abs(diff) <= range) return 'target-hit';
+  return diff < 0 ? 'target-low' : 'target-high';
+}
+
 function calcTotals(logs) {
   return logs.reduce(
     (acc, l) => ({
@@ -170,41 +217,57 @@ function calcTotals(logs) {
 }
 
 function targetsBarHTML(tgt, totals) {
-  const hasTargets = tgt && (tgt.calories || tgt.protein_g || tgt.carbs_g || tgt.fat_g);
+  const hasTargets = tgt && (tgt.calories || tgt.protein_g);
   if (!hasTargets) {
     return '<p class="nutrition-no-targets">Set macro targets in &#9881; Meal Settings</p>';
   }
-  const pct = tgt.calories > 0 ? Math.min(100, Math.round((totals.cal / tgt.calories) * 100)) : 0;
+  const pct       = tgt.calories > 0 ? Math.min(100, Math.round((totals.cal / tgt.calories) * 100)) : 0;
+  const calClass  = targetClass(totals.cal,  tgt.calories,  CAL_RANGE);
+  const protClass = targetClass(totals.prot, tgt.protein_g, PROT_RANGE);
   return `
     <div class="nutrition-targets-bar">
       <div class="targets-summary">
-        <span>${Math.round(totals.cal)} / ${tgt.calories} kcal</span>
-        <span>${Math.round(totals.prot)}/${tgt.protein_g}g P</span>
-        <span>${Math.round(totals.carb)}/${tgt.carbs_g}g C</span>
-        <span>${Math.round(totals.fat)}/${tgt.fat_g}g F</span>
+        <span class="${calClass}">${Math.round(totals.cal)} / ${tgt.calories} kcal</span>
+        <span class="${protClass}">${Math.round(totals.prot)}/${tgt.protein_g}g P</span>
       </div>
       <div class="targets-progress-bar">
-        <div class="targets-progress-fill" style="width:${pct}%"></div>
+        <div class="targets-progress-fill ${calClass}" style="width:${pct}%"></div>
       </div>
     </div>`;
 }
 
-function totalsHTML(totals, tgt) {
-  const hasTargets = tgt && (tgt.calories || tgt.protein_g || tgt.carbs_g || tgt.fat_g);
+function totalsHTML(totals, tgt, tdeeKcal) {
+  const hasTargets = tgt && (tgt.calories || tgt.protein_g);
+  const calClass  = hasTargets ? targetClass(totals.cal,  tgt.calories,  CAL_RANGE)  : '';
+  const protClass = hasTargets ? targetClass(totals.prot, tgt.protein_g, PROT_RANGE) : '';
+
   const rows = [
-    { label: 'Calories', val: Math.round(totals.cal),  tgt: tgt?.calories,   unit: 'kcal' },
-    { label: 'Protein',  val: Math.round(totals.prot), tgt: tgt?.protein_g,  unit: 'g' },
-    { label: 'Carbs',    val: Math.round(totals.carb), tgt: tgt?.carbs_g,    unit: 'g' },
-    { label: 'Fat',      val: Math.round(totals.fat),  tgt: tgt?.fat_g,      unit: 'g' },
+    { label: 'Calories', val: Math.round(totals.cal),  tgtVal: tgt?.calories,  unit: 'kcal', cls: calClass },
+    { label: 'Protein',  val: Math.round(totals.prot), tgtVal: tgt?.protein_g, unit: 'g',    cls: protClass },
   ];
+
+  let deficitRow = '';
+  if (tdeeKcal != null) {
+    const actualDeficit = Math.round(totals.cal) - tdeeKcal;
+    const defTgt        = tgt?.deficit_target ?? null;
+    const defClass      = defTgt != null ? targetClass(actualDeficit, defTgt, CAL_RANGE) : '';
+    const tgtStr        = defTgt != null ? ` / ${defTgt}` : '';
+    deficitRow = `
+      <div class="totals-row">
+        <span class="totals-label">Deficit</span>
+        <span class="totals-value ${defClass}">${actualDeficit}${tgtStr} kcal</span>
+      </div>`;
+  }
+
   return `
     <div class="nutrition-totals">
       <div class="nutrition-totals-title">Daily Total</div>
       ${rows.map(r => `
         <div class="totals-row">
           <span class="totals-label">${r.label}</span>
-          <span class="totals-value">${r.val}${hasTargets ? ` / ${r.tgt}` : ''} ${r.unit}</span>
+          <span class="totals-value ${r.cls}">${r.val}${hasTargets ? ` / ${r.tgtVal}` : ''} ${r.unit}</span>
         </div>`).join('')}
+      ${deficitRow}
     </div>`;
 }
 
@@ -215,14 +278,31 @@ function wireMealCards() {
 }
 
 function wireCard(card) {
-  const header    = card.querySelector('.meal-card-header');
-  const body      = card.querySelector('.meal-card-body');
-  const deleteBtn = card.querySelector('.meal-delete-btn');
-  const tid       = card.dataset.templateId ? parseInt(card.dataset.templateId) : null;
-  const isCustom  = card.dataset.isCustom === '1';
+  const header     = card.querySelector('.meal-card-header');
+  const body       = card.querySelector('.meal-card-body');
+  const deleteBtn  = card.querySelector('.meal-delete-btn');
+  const confirmBtn = card.querySelector('.meal-confirm-btn');
+  const tid        = card.dataset.templateId ? parseInt(card.dataset.templateId) : null;
+  const isCustom   = card.dataset.isCustom === '1';
+
+  if (confirmBtn) {
+    confirmBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (confirmBtn.classList.contains('confirmed')) {
+        // Already logged — clicking ✓ expands/collapses to edit
+        const expanding = body.classList.contains('hidden');
+        body.classList.toggle('hidden', !expanding);
+        if (expanding) body.querySelector('.macro-input')?.focus();
+      } else {
+        // Unlogged quick-confirm: one-tap log with defaults
+        const template = (templates || []).find(t => t.id === tid);
+        if (template) confirmDefaultMeal(card, template);
+      }
+    });
+  }
 
   header.addEventListener('click', e => {
-    if (e.target === deleteBtn) return;
+    if (e.target === deleteBtn || e.target === confirmBtn) return;
     const expanding = body.classList.contains('hidden');
     body.classList.toggle('hidden', !expanding);
     if (expanding) body.querySelector('.macro-input')?.focus();
@@ -256,6 +336,12 @@ function updateCardDisplay(card, values) {
   card.querySelector('.meal-summary').innerHTML = summaryHTML(cal, p, c, f, true);
   card.classList.remove('unlogged');
   card.classList.add('logged');
+  // Transition confirm button to confirmed state if it's a quick-confirm slot
+  const confirmBtn = card.querySelector('.meal-confirm-btn');
+  if (confirmBtn && !confirmBtn.classList.contains('confirmed')) {
+    confirmBtn.classList.add('confirmed');
+    confirmBtn.title = 'Logged';
+  }
 }
 
 function updateTotalsDisplay() {
@@ -276,7 +362,42 @@ function updateTotalsDisplay() {
   if (tBar) tBar.outerHTML = targetsBarHTML(tgt, totals);
 
   const tot = document.querySelector('.nutrition-totals');
-  if (tot) tot.outerHTML = totalsHTML(totals, tgt);
+  if (tot) tot.outerHTML = totalsHTML(totals, tgt, logData?.tdee_kcal);
+}
+
+// --- Quick confirm (Option B) ---
+
+async function confirmDefaultMeal(card, template) {
+  const logId = card.dataset.logId ? parseInt(card.dataset.logId) : null;
+  if (logId) return; // already logged
+  const key = cardKey(card, template.id);
+  if (creatingSlots[key]) return;
+
+  const defaults = getSlotDefaults(template);
+
+  creatingSlots[key] = true;
+  try {
+    const { id } = await api('/api/nutrition/logs', {
+      method: 'POST',
+      body: {
+        date: currentDate,
+        meal_template_id: template.id,
+        meal_name: template.name,
+        sort_order: parseInt(card.dataset.sortOrder) || 0,
+        ...defaults,
+      },
+    });
+    card.dataset.logId = id;
+  } finally {
+    creatingSlots[key] = false;
+  }
+
+  // Sync inputs with the confirmed defaults
+  card.querySelectorAll('.macro-input').forEach(inp => {
+    inp.value = Math.round(defaults[inp.dataset.field] || 0);
+  });
+  updateCardDisplay(card, defaults);
+  updateTotalsDisplay();
 }
 
 // --- Save logic ---
@@ -344,23 +465,38 @@ async function handleDelete(card, tid, isCustom) {
   if (isCustom || !tid) {
     card.remove();
   } else {
-    // Reset template slot to unlogged defaults
     const template = (templates || []).find(t => t.id === tid);
     if (!template) { card.remove(); return; }
+
+    const useDefaults = card.dataset.useDefaults === '1';
     card.dataset.logId = '';
     card.classList.remove('logged');
     card.classList.add('unlogged');
-    card.querySelector('.meal-summary').innerHTML = summaryHTML(
-      template.calories_kcal, template.protein_g, template.carbs_g, template.fat_g, false
-    );
-    card.querySelectorAll('.macro-input').forEach(inp => {
-      const f = inp.dataset.field;
-      inp.value = Math.round(
-        f === 'calories_kcal' ? template.calories_kcal :
-        f === 'protein_g'     ? template.protein_g :
-        f === 'carbs_g'       ? template.carbs_g : template.fat_g
+
+    if (useDefaults) {
+      // Reset to dimmed defaults + restore unconfirmed ✓ button
+      card.querySelector('.meal-summary').innerHTML = summaryHTML(
+        template.calories_kcal, template.protein_g, template.carbs_g, template.fat_g, false
       );
-    });
+      card.querySelectorAll('.macro-input').forEach(inp => {
+        const f = inp.dataset.field;
+        inp.value = Math.round(
+          f === 'calories_kcal' ? template.calories_kcal :
+          f === 'protein_g'     ? template.protein_g :
+          f === 'carbs_g'       ? template.carbs_g : template.fat_g
+        );
+      });
+      const confirmBtn = card.querySelector('.meal-confirm-btn');
+      if (confirmBtn) {
+        confirmBtn.classList.remove('confirmed');
+        confirmBtn.title = 'Log with defaults';
+      }
+    } else {
+      // Reset to blank
+      card.querySelector('.meal-summary').innerHTML = '<span class="summary-blank">&mdash;</span>';
+      card.querySelectorAll('.macro-input').forEach(inp => { inp.value = 0; });
+    }
+
     card.querySelector('.meal-card-body').classList.add('hidden');
     const key = cardKey(card, tid);
     clearTimeout(saveTimers[key]);
@@ -437,7 +573,7 @@ function settingsBodyHTML(tmpl, tgt) {
           ${targetFieldsHTML('rest', tgt.rest)}
         </div>
       </div>
-      <button class="btn-save-targets" id="settings-save-targets">Save Targets</button>
+      <button class="btn-save-targets" id="settings-save-targets">Save</button>
     </div>`;
 }
 
@@ -449,7 +585,10 @@ function templateRowHTML(t) {
         <label class="tmpl-rest-toggle">
           <input type="checkbox" class="tmpl-rest-check" ${t.include_rest_day ? 'checked' : ''}> Rest day
         </label>
-        <button class="tmpl-delete btn-link text-warn">✕</button>
+        <label class="tmpl-quick-toggle">
+          <input type="checkbox" class="tmpl-use-defaults-check" ${t.use_defaults ? 'checked' : ''}> Quick &#10003;
+        </label>
+        <button class="tmpl-delete btn-link text-warn">&#10005;</button>
       </div>
       <div class="template-row-macros">
         ${tmplMacroHTML('calories_kcal', 'Cal', t.calories_kcal)}
@@ -469,18 +608,23 @@ function tmplMacroHTML(field, label, value) {
 }
 
 function targetFieldsHTML(profile, tgt) {
-  const fields = [
-    ['calories',   'Calories (kcal)'],
-    ['protein_g',  'Protein (g)'],
-    ['carbs_g',    'Carbs (g)'],
-    ['fat_g',      'Fat (g)'],
-  ];
-  return fields.map(([f, label]) => `
+  // carbs_g and fat_g are stored in DB but hidden from UI for now
+  return `
     <div class="target-field">
-      <label>${label}</label>
-      <input type="number" class="target-input" data-profile="${profile}" data-field="${f}"
-             value="${tgt?.[f] || 0}" min="0" step="1" inputmode="numeric">
-    </div>`).join('');
+      <label>Calories (kcal)</label>
+      <input type="number" class="target-input" data-profile="${profile}" data-field="calories"
+             value="${tgt?.calories || 0}" min="0" step="1" inputmode="numeric">
+    </div>
+    <div class="target-field">
+      <label>Protein (g)</label>
+      <input type="number" class="target-input" data-profile="${profile}" data-field="protein_g"
+             value="${tgt?.protein_g || 0}" min="0" step="1" inputmode="numeric">
+    </div>
+    <div class="target-field">
+      <label>Deficit (kcal)</label>
+      <input type="number" class="target-input" data-profile="${profile}" data-field="deficit_target"
+             value="${tgt?.deficit_target ?? ''}" step="1" inputmode="numeric" placeholder="—">
+    </div>`;
 }
 
 function wireSettingsModal(tmpl, tgt) {
@@ -493,6 +637,7 @@ function wireSettingsModal(tmpl, tgt) {
         fields[inp.dataset.field] = parseFloat(inp.value) || 0;
       });
       fields.include_rest_day = row.querySelector('.tmpl-rest-check').checked ? 1 : 0;
+      fields.use_defaults     = row.querySelector('.tmpl-use-defaults-check').checked ? 1 : 0;
       await api(`/api/nutrition/templates/${id}`, { method: 'PUT', body: fields });
       // Update local templates cache
       const t = (templates || []).find(x => x.id === id);
@@ -501,6 +646,7 @@ function wireSettingsModal(tmpl, tgt) {
 
     row.querySelectorAll('.tmpl-name, .tmpl-macro-input').forEach(inp => inp.addEventListener('input', debouncedSave));
     row.querySelector('.tmpl-rest-check').addEventListener('change', debouncedSave);
+    row.querySelector('.tmpl-use-defaults-check').addEventListener('change', debouncedSave);
 
     row.querySelector('.tmpl-delete').addEventListener('click', async () => {
       const name = row.querySelector('.tmpl-name').value || 'this meal';
@@ -516,17 +662,25 @@ function wireSettingsModal(tmpl, tgt) {
     if (!name?.trim()) return;
     await api('/api/nutrition/templates', {
       method: 'POST',
-      body: { name: name.trim(), calories_kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, include_rest_day: 1 },
+      body: { name: name.trim(), calories_kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, include_rest_day: 1, use_defaults: 0 },
     });
     templates = await api('/api/nutrition/templates');
     renderSettingsModal(templates, targets);
   });
 
   document.getElementById('settings-save-targets').addEventListener('click', async () => {
-    const workout = {}, rest = {};
+    // Seed with existing values so hidden fields (carbs_g, fat_g) are preserved
+    const workout = { ...(targets.workout || {}) };
+    const rest    = { ...(targets.rest    || {}) };
     document.querySelectorAll('.target-input').forEach(inp => {
       const obj = inp.dataset.profile === 'workout' ? workout : rest;
-      obj[inp.dataset.field] = parseFloat(inp.value) || 0;
+      const raw = inp.value.trim();
+      // deficit_target is optional — blank means no target (null), not zero
+      if (inp.dataset.field === 'deficit_target') {
+        obj[inp.dataset.field] = raw === '' ? null : parseFloat(raw);
+      } else {
+        obj[inp.dataset.field] = parseFloat(raw) || 0;
+      }
     });
     await api('/api/nutrition/targets', { method: 'PUT', body: { workout, rest } });
     targets = { workout, rest };

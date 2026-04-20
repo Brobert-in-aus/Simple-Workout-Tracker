@@ -184,6 +184,13 @@ function initSchema() {
     db.exec("ALTER TABLE day_exercises ADD COLUMN targets_independent INTEGER NOT NULL DEFAULT 0");
   }
 
+  // Migration: add use_defaults flag to meal_templates (one-tap confirm vs manual entry)
+  try {
+    db.prepare("SELECT use_defaults FROM meal_templates LIMIT 1").get();
+  } catch (e) {
+    db.exec("ALTER TABLE meal_templates ADD COLUMN use_defaults INTEGER NOT NULL DEFAULT 0");
+  }
+
   // Migration: populate schedule table from days if schedule is empty
   const scheduleCount = db.prepare("SELECT COUNT(*) as c FROM schedule").get().c;
   if (scheduleCount === 0) {
@@ -1044,17 +1051,17 @@ function getMealTemplates() {
   return db.prepare('SELECT * FROM meal_templates WHERE active = 1 ORDER BY sort_order, id').all();
 }
 
-function createMealTemplate({ name, calories_kcal = 0, protein_g = 0, carbs_g = 0, fat_g = 0, include_rest_day = 1 }) {
+function createMealTemplate({ name, calories_kcal = 0, protein_g = 0, carbs_g = 0, fat_g = 0, include_rest_day = 1, use_defaults = 0 }) {
   const maxSort = db.prepare('SELECT COALESCE(MAX(sort_order), -1) as m FROM meal_templates WHERE active = 1').get().m;
   const info = db.prepare(`
-    INSERT INTO meal_templates (name, sort_order, calories_kcal, protein_g, carbs_g, fat_g, include_rest_day, active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-  `).run(name, maxSort + 1, calories_kcal, protein_g, carbs_g, fat_g, include_rest_day ? 1 : 0);
+    INSERT INTO meal_templates (name, sort_order, calories_kcal, protein_g, carbs_g, fat_g, include_rest_day, use_defaults, active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+  `).run(name, maxSort + 1, calories_kcal, protein_g, carbs_g, fat_g, include_rest_day ? 1 : 0, use_defaults ? 1 : 0);
   return info.lastInsertRowid;
 }
 
 function updateMealTemplate(id, fields) {
-  const allowed = ['name', 'calories_kcal', 'protein_g', 'carbs_g', 'fat_g', 'include_rest_day', 'sort_order', 'active'];
+  const allowed = ['name', 'calories_kcal', 'protein_g', 'carbs_g', 'fat_g', 'include_rest_day', 'use_defaults', 'sort_order', 'active'];
   const updates = [], values = [];
   for (const [key, val] of Object.entries(fields)) {
     if (allowed.includes(key)) { updates.push(`${key} = ?`); values.push(val); }
@@ -1101,6 +1108,19 @@ function updateMacroLog(id, fields) {
 
 function deleteMacroLog(id) {
   db.prepare('DELETE FROM macro_logs WHERE id = ?').run(id);
+}
+
+function getDailyTdee(date) {
+  // Returns TDEE (BMR + active energy) in kcal for the given date,
+  // or null if no data exists (health_daily_metrics table may not exist yet).
+  try {
+    const row = db.prepare(
+      'SELECT bmr_kcal + active_energy_kcal AS tdee_kcal FROM health_daily_metrics WHERE date = ?'
+    ).get(date);
+    return row ? Math.round(row.tdee_kcal) : null;
+  } catch (e) {
+    return null; // table doesn't exist yet — Phase 2 feature
+  }
 }
 
 // Create a weekly backup of the DB if one doesn't already exist for the current week.
@@ -1204,4 +1224,6 @@ module.exports = {
   createMacroLog,
   updateMacroLog,
   deleteMacroLog,
+  // TDEE / health metrics
+  getDailyTdee,
 };
