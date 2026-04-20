@@ -1,7 +1,7 @@
 import { getMonday, shiftDate, todayStr } from '../core/dates.js';
 import { state } from '../core/state.js';
 
-export function initNavigation({ loadTemplate, loadBodyTab, loadWeek, loadWorkout }) {
+export function initNavigation({ loadTemplate, loadBodyTab, loadWeek, loadWorkout, loadNutrition }) {
   document.querySelectorAll('.nav-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.nav-btn').forEach((b) => b.classList.remove('active'));
@@ -11,6 +11,7 @@ export function initNavigation({ loadTemplate, loadBodyTab, loadWeek, loadWorkou
 
       if (btn.dataset.tab === 'template') loadTemplate();
       if (btn.dataset.tab === 'body') loadBodyTab();
+      if (btn.dataset.tab === 'nutrition') loadNutrition();
     });
   });
 

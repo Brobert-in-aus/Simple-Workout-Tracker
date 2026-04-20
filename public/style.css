@@ -2159,3 +2159,431 @@ html, body {
   color: var(--text-dim);
   padding: 16px;
 }
+
+/* --- Nutrition Tab --- */
+
+.nutrition-date-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px 0;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 10;
+}
+
+#nutr-date-display {
+  flex: 1;
+  text-align: center;
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text);
+}
+
+#nutrition-content {
+  padding: 8px 16px 24px;
+}
+
+.nutrition-day-badge {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 20px;
+  margin-bottom: 12px;
+  letter-spacing: 0.3px;
+}
+
+.nutrition-day-badge.training {
+  background: #e8f0fe;
+  color: var(--accent);
+}
+
+.nutrition-day-badge.rest {
+  background: #f0fff4;
+  color: var(--success);
+}
+
+.nutrition-no-targets {
+  font-size: 13px;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 8px 0 12px;
+}
+
+.nutrition-targets-bar {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.targets-summary {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.targets-summary span {
+  white-space: nowrap;
+}
+
+.targets-progress-bar {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.targets-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+/* Meal cards */
+
+#nutrition-meals {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.meal-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.meal-card.unlogged {
+  opacity: 0.7;
+}
+
+.meal-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.meal-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 0 0 auto;
+}
+
+.meal-summary {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: right;
+}
+
+.summary-dim {
+  color: var(--text-dim);
+  opacity: 0.6;
+}
+
+.meal-delete-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 0 0 4px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.meal-delete-btn:hover {
+  color: var(--text-warn);
+}
+
+.meal-card-body {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+}
+
+.meal-card-body.hidden {
+  display: none;
+}
+
+.meal-macro-inputs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.macro-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.macro-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.macro-input {
+  width: 100%;
+  padding: 6px 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 15px;
+  color: var(--text);
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+.macro-input::-webkit-inner-spin-button,
+.macro-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+}
+
+.macro-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: #fff;
+}
+
+.btn-add-meal {
+  width: 100%;
+  padding: 10px;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+
+.btn-add-meal:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Totals */
+
+.nutrition-totals {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.nutrition-totals-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.totals-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 14px;
+}
+
+.totals-label {
+  color: var(--text-dim);
+}
+
+.totals-value {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.nutr-settings-btn {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+/* Settings modal */
+
+.settings-section {
+  margin-bottom: 20px;
+}
+
+.settings-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+
+.template-row {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+
+.template-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.tmpl-name {
+  flex: 1;
+  padding: 5px 8px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.tmpl-rest-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tmpl-delete {
+  font-size: 14px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.template-row-macros {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.tmpl-macro-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tmpl-macro-field label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.tmpl-macro-input {
+  width: 100%;
+  padding: 5px 4px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--text);
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+.tmpl-macro-input::-webkit-inner-spin-button,
+.tmpl-macro-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+}
+
+.btn-add-template {
+  width: 100%;
+  padding: 8px;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+.btn-add-template:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.targets-profiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.targets-profile-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.target-field {
+  margin-bottom: 8px;
+}
+
+.target-field label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 3px;
+}
+
+.target-field input {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--text);
+  -moz-appearance: textfield;
+}
+
+.target-field input::-webkit-inner-spin-button,
+.target-field input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+}
+
+.btn-save-targets {
+  width: 100%;
+  padding: 10px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-save-targets:hover {
+  background: var(--accent-dim);
+}

@@ -518,6 +518,97 @@ app.get('/api/trends/frequency', (req, res) => {
   res.json(db.getAllWorkoutSessionDates());
 });
 
+// --- Nutrition: Meal Templates API ---
+
+app.get('/api/nutrition/templates', (req, res) => {
+  res.json(db.getMealTemplates());
+});
+
+app.post('/api/nutrition/templates', (req, res) => {
+  const { name, calories_kcal, protein_g, carbs_g, fat_g, include_rest_day } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });
+  const id = db.createMealTemplate({
+    name: name.trim(),
+    calories_kcal: parseFloat(calories_kcal) || 0,
+    protein_g: parseFloat(protein_g) || 0,
+    carbs_g: parseFloat(carbs_g) || 0,
+    fat_g: parseFloat(fat_g) || 0,
+    include_rest_day: include_rest_day != null ? !!include_rest_day : true,
+  });
+  res.json({ id });
+});
+
+app.put('/api/nutrition/templates/reorder', (req, res) => {
+  const { order } = req.body;
+  if (!Array.isArray(order)) return res.status(400).json({ error: 'order array required' });
+  db.reorderMealTemplates(order);
+  res.json({ ok: true });
+});
+
+app.put('/api/nutrition/templates/:id', (req, res) => {
+  db.updateMealTemplate(parseInt(req.params.id), req.body);
+  res.json({ ok: true });
+});
+
+app.delete('/api/nutrition/templates/:id', (req, res) => {
+  db.deleteMealTemplate(parseInt(req.params.id));
+  res.json({ ok: true });
+});
+
+// --- Nutrition: Macro Logs API ---
+
+app.get('/api/nutrition/logs/:date', (req, res) => {
+  const date = req.params.date;
+  const logs = db.getMacroLogsForDate(date);
+  const workouts = db.getWorkoutsForDate(date);
+  res.json({ logs, is_workout_day: workouts.length > 0 });
+});
+
+app.post('/api/nutrition/logs', (req, res) => {
+  const { date, meal_template_id, meal_name, sort_order, calories_kcal, protein_g, carbs_g, fat_g } = req.body;
+  if (!date || !meal_name) return res.status(400).json({ error: 'date and meal_name required' });
+  const id = db.createMacroLog({
+    date,
+    meal_template_id: meal_template_id ?? null,
+    meal_name,
+    sort_order: parseInt(sort_order) || 0,
+    calories_kcal: parseFloat(calories_kcal) || 0,
+    protein_g: parseFloat(protein_g) || 0,
+    carbs_g: parseFloat(carbs_g) || 0,
+    fat_g: parseFloat(fat_g) || 0,
+  });
+  res.json({ id });
+});
+
+app.put('/api/nutrition/logs/:id', (req, res) => {
+  db.updateMacroLog(parseInt(req.params.id), req.body);
+  res.json({ ok: true });
+});
+
+app.delete('/api/nutrition/logs/:id', (req, res) => {
+  db.deleteMacroLog(parseInt(req.params.id));
+  res.json({ ok: true });
+});
+
+// --- Nutrition: Macro Targets API ---
+
+app.get('/api/nutrition/targets', (req, res) => {
+  const w = db.getUserSetting('macro_targets_workout');
+  const r = db.getUserSetting('macro_targets_rest');
+  const empty = { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 };
+  res.json({
+    workout: w ? JSON.parse(w) : empty,
+    rest: r ? JSON.parse(r) : empty,
+  });
+});
+
+app.put('/api/nutrition/targets', (req, res) => {
+  const { workout, rest } = req.body;
+  if (workout) db.setUserSetting('macro_targets_workout', JSON.stringify(workout));
+  if (rest) db.setUserSetting('macro_targets_rest', JSON.stringify(rest));
+  res.json({ ok: true });
+});
+
 // --- Graceful shutdown ---
 // Closes the DB (checkpoints the WAL) before exiting so the WAL doesn't accumulate
 // across restarts. Called via the /api/shutdown endpoint (used by start.bat) or

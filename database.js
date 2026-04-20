@@ -82,7 +82,37 @@ function initSchema() {
       date TEXT NOT NULL UNIQUE,
       weight_kg REAL NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS user_settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS meal_templates (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      name             TEXT    NOT NULL,
+      sort_order       INTEGER NOT NULL DEFAULT 0,
+      calories_kcal    REAL    NOT NULL DEFAULT 0,
+      protein_g        REAL    NOT NULL DEFAULT 0,
+      carbs_g          REAL    NOT NULL DEFAULT 0,
+      fat_g            REAL    NOT NULL DEFAULT 0,
+      include_rest_day INTEGER NOT NULL DEFAULT 1,
+      active           INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS macro_logs (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      date             TEXT    NOT NULL,
+      meal_template_id INTEGER REFERENCES meal_templates(id) ON DELETE SET NULL,
+      meal_name        TEXT    NOT NULL,
+      sort_order       INTEGER NOT NULL DEFAULT 0,
+      calories_kcal    REAL    NOT NULL DEFAULT 0,
+      protein_g        REAL    NOT NULL DEFAULT 0,
+      carbs_g          REAL    NOT NULL DEFAULT 0,
+      fat_g            REAL    NOT NULL DEFAULT 0
+    );
   `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_macro_logs_date ON macro_logs(date)');
 
   // --- Migrations ---
 
@@ -995,6 +1025,84 @@ function closeDb() {
   }
 }
 
+// --- User settings helpers ---
+
+function getUserSetting(key) {
+  const row = db.prepare('SELECT value FROM user_settings WHERE key = ?').get(key);
+  return row ? row.value : null;
+}
+
+function setUserSetting(key, value) {
+  db.prepare(
+    'INSERT INTO user_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).run(key, value);
+}
+
+// --- Meal template helpers ---
+
+function getMealTemplates() {
+  return db.prepare('SELECT * FROM meal_templates WHERE active = 1 ORDER BY sort_order, id').all();
+}
+
+function createMealTemplate({ name, calories_kcal = 0, protein_g = 0, carbs_g = 0, fat_g = 0, include_rest_day = 1 }) {
+  const maxSort = db.prepare('SELECT COALESCE(MAX(sort_order), -1) as m FROM meal_templates WHERE active = 1').get().m;
+  const info = db.prepare(`
+    INSERT INTO meal_templates (name, sort_order, calories_kcal, protein_g, carbs_g, fat_g, include_rest_day, active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+  `).run(name, maxSort + 1, calories_kcal, protein_g, carbs_g, fat_g, include_rest_day ? 1 : 0);
+  return info.lastInsertRowid;
+}
+
+function updateMealTemplate(id, fields) {
+  const allowed = ['name', 'calories_kcal', 'protein_g', 'carbs_g', 'fat_g', 'include_rest_day', 'sort_order', 'active'];
+  const updates = [], values = [];
+  for (const [key, val] of Object.entries(fields)) {
+    if (allowed.includes(key)) { updates.push(`${key} = ?`); values.push(val); }
+  }
+  if (updates.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE meal_templates SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+}
+
+function deleteMealTemplate(id) {
+  db.prepare('UPDATE meal_templates SET active = 0 WHERE id = ?').run(id);
+}
+
+function reorderMealTemplates(orderedIds) {
+  const stmt = db.prepare('UPDATE meal_templates SET sort_order = ? WHERE id = ?');
+  const txn = db.transaction(() => { orderedIds.forEach((id, idx) => stmt.run(idx, id)); });
+  txn();
+}
+
+// --- Macro log helpers ---
+
+function getMacroLogsForDate(date) {
+  return db.prepare('SELECT * FROM macro_logs WHERE date = ? ORDER BY sort_order, id').all(date);
+}
+
+function createMacroLog({ date, meal_template_id = null, meal_name, sort_order = 0, calories_kcal = 0, protein_g = 0, carbs_g = 0, fat_g = 0 }) {
+  const info = db.prepare(`
+    INSERT INTO macro_logs (date, meal_template_id, meal_name, sort_order, calories_kcal, protein_g, carbs_g, fat_g)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(date, meal_template_id ?? null, meal_name, sort_order, calories_kcal, protein_g, carbs_g, fat_g);
+  return info.lastInsertRowid;
+}
+
+function updateMacroLog(id, fields) {
+  const allowed = ['calories_kcal', 'protein_g', 'carbs_g', 'fat_g', 'meal_name', 'sort_order'];
+  const updates = [], values = [];
+  for (const [key, val] of Object.entries(fields)) {
+    if (allowed.includes(key)) { updates.push(`${key} = ?`); values.push(val); }
+  }
+  if (updates.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE macro_logs SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+}
+
+function deleteMacroLog(id) {
+  db.prepare('DELETE FROM macro_logs WHERE id = ?').run(id);
+}
+
 // Create a weekly backup of the DB if one doesn't already exist for the current week.
 // Keyed by the Monday of the current week so running the server any day that week is a no-op
 // after the first successful run.
@@ -1082,4 +1190,18 @@ module.exports = {
   getPerformedExercises,
   getExerciseTrend,
   getAllWorkoutSessionDates,
+  // User settings
+  getUserSetting,
+  setUserSetting,
+  // Meal templates
+  getMealTemplates,
+  createMealTemplate,
+  updateMealTemplate,
+  deleteMealTemplate,
+  reorderMealTemplates,
+  // Macro logs
+  getMacroLogsForDate,
+  createMacroLog,
+  updateMacroLog,
+  deleteMacroLog,
 };
