@@ -221,17 +221,25 @@ function targetsBarHTML(tgt, totals) {
   if (!hasTargets) {
     return '<p class="nutrition-no-targets">Set macro targets in &#9881; Meal Settings</p>';
   }
-  const pct       = tgt.calories > 0 ? Math.min(100, Math.round((totals.cal / tgt.calories) * 100)) : 0;
+  const calPct  = tgt.calories  > 0 ? Math.min(100, Math.round((totals.cal  / tgt.calories)  * 100)) : 0;
+  const protPct = tgt.protein_g > 0 ? Math.min(100, Math.round((totals.prot / tgt.protein_g) * 100)) : 0;
   const calClass  = targetClass(totals.cal,  tgt.calories,  CAL_RANGE);
   const protClass = targetClass(totals.prot, tgt.protein_g, PROT_RANGE);
   return `
     <div class="nutrition-targets-bar">
-      <div class="targets-summary">
-        <span class="${calClass}">${Math.round(totals.cal)} / ${tgt.calories} kcal</span>
-        <span class="${protClass}">${Math.round(totals.prot)}/${tgt.protein_g}g P</span>
+      <div class="target-bar-row">
+        <span class="target-bar-label">Calories</span>
+        <span class="target-bar-value ${calClass}">${Math.round(totals.cal)} / ${tgt.calories} kcal</span>
       </div>
       <div class="targets-progress-bar">
-        <div class="targets-progress-fill ${calClass}" style="width:${pct}%"></div>
+        <div class="targets-progress-fill ${calClass}" style="width:${calPct}%"></div>
+      </div>
+      <div class="target-bar-row">
+        <span class="target-bar-label">Protein</span>
+        <span class="target-bar-value ${protClass}">${Math.round(totals.prot)} / ${tgt.protein_g} g</span>
+      </div>
+      <div class="targets-progress-bar">
+        <div class="targets-progress-fill ${protClass}" style="width:${protPct}%"></div>
       </div>
     </div>`;
 }
@@ -685,7 +693,9 @@ function wireSettingsModal(tmpl, tgt) {
     await api('/api/nutrition/targets', { method: 'PUT', body: { workout, rest } });
     targets = { workout, rest };
     showToast('Targets saved');
-    renderContent(); // update progress bar with new targets
+    // Use updateTotalsDisplay (reads from live DOM) instead of renderContent()
+    // to avoid wiping in-session logged state that hasn't been written back to logData.
+    updateTotalsDisplay();
   });
 }
 

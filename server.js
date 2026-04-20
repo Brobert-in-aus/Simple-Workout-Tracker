@@ -569,15 +569,31 @@ app.get('/api/nutrition/logs/:date', (req, res) => {
 app.post('/api/nutrition/logs', (req, res) => {
   const { date, meal_template_id, meal_name, sort_order, calories_kcal, protein_g, carbs_g, fat_g } = req.body;
   if (!date || !meal_name) return res.status(400).json({ error: 'date and meal_name required' });
+
+  const macros = {
+    calories_kcal: parseFloat(calories_kcal) || 0,
+    protein_g:     parseFloat(protein_g)     || 0,
+    carbs_g:       parseFloat(carbs_g)       || 0,
+    fat_g:         parseFloat(fat_g)         || 0,
+  };
+
+  // Upsert for template-based logs: if an entry already exists for this
+  // template+date (e.g. from a rapid double-tap), return its id and update
+  // the values rather than creating a duplicate row.
+  if (meal_template_id != null) {
+    const existing = db.getMacroLogByTemplateAndDate(parseInt(meal_template_id), date);
+    if (existing) {
+      db.updateMacroLog(existing.id, macros);
+      return res.json({ id: existing.id });
+    }
+  }
+
   const id = db.createMacroLog({
     date,
     meal_template_id: meal_template_id ?? null,
     meal_name,
     sort_order: parseInt(sort_order) || 0,
-    calories_kcal: parseFloat(calories_kcal) || 0,
-    protein_g: parseFloat(protein_g) || 0,
-    carbs_g: parseFloat(carbs_g) || 0,
-    fat_g: parseFloat(fat_g) || 0,
+    ...macros,
   });
   res.json({ id });
 });

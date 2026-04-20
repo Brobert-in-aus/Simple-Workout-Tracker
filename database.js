@@ -1087,6 +1087,10 @@ function getMacroLogsForDate(date) {
   return db.prepare('SELECT * FROM macro_logs WHERE date = ? ORDER BY sort_order, id').all(date);
 }
 
+function getMacroLogByTemplateAndDate(meal_template_id, date) {
+  return db.prepare('SELECT * FROM macro_logs WHERE meal_template_id = ? AND date = ?').get(meal_template_id, date) ?? null;
+}
+
 function createMacroLog({ date, meal_template_id = null, meal_name, sort_order = 0, calories_kcal = 0, protein_g = 0, carbs_g = 0, fat_g = 0 }) {
   const info = db.prepare(`
     INSERT INTO macro_logs (date, meal_template_id, meal_name, sort_order, calories_kcal, protein_g, carbs_g, fat_g)
@@ -1221,6 +1225,7 @@ module.exports = {
   reorderMealTemplates,
   // Macro logs
   getMacroLogsForDate,
+  getMacroLogByTemplateAndDate,
   createMacroLog,
   updateMacroLog,
   deleteMacroLog,
