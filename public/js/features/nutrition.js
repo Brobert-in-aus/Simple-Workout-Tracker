@@ -705,8 +705,8 @@ function targetFieldsHTML(profile, tgt) {
     </div>
     <div class="target-field ${energyMeta.className}">
       <label class="energy-target-label">${energyMeta.label}</label>
-      <input type="number" class="target-input" data-profile="${profile}" data-field="deficit_target"
-             value="${tgt?.deficit_target ?? ''}" step="1" inputmode="numeric" placeholder="Deficit/Surplus">
+      <input type="text" class="target-input" data-profile="${profile}" data-field="deficit_target"
+             value="${tgt?.deficit_target ?? ''}" inputmode="text" autocapitalize="off" spellcheck="false" placeholder="Deficit/Surplus">
       <div class="target-field-hint">Enter negative for a deficit, positive for a surplus.</div>
     </div>`;
 }

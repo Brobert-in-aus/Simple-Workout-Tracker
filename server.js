@@ -736,10 +736,10 @@ app.delete('/api/nutrition/templates/:id', (req, res) => {
 app.get('/api/nutrition/logs/:date', (req, res) => {
   const date = req.params.date;
   const logs = db.getMacroLogsForDate(date);
-  const workouts = db.getWorkoutsForDate(date);
+  const is_workout_day = db.isWorkoutDayForNutrition(date);
   const health_metrics = db.getMacroTdeeContextForDate(date);
   const tdee_kcal = health_metrics?.tdee_kcal != null ? Math.round(health_metrics.tdee_kcal) : null;
-  res.json({ logs, is_workout_day: workouts.length > 0, tdee_kcal, health_metrics });
+  res.json({ logs, is_workout_day, tdee_kcal, health_metrics });
 });
 
 app.post('/api/nutrition/logs', (req, res) => {

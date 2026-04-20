@@ -573,6 +573,68 @@ test('dry-run summary shows no new data when snapshot is older than stored rows'
   assert.equal(summary.health_daily_metrics_skipped_stale, 1);
 });
 
+test('identical snapshot preview reports no new data after import', () => {
+  const templateId = db.createTemplate('Preview Schedule');
+  db.addScheduleEntry(0, templateId);
+
+  const source = normalizeImportSource('identical.json', {
+    data: {
+      workouts: [
+        {
+          id: 'identical-workout-1',
+          name: 'Functional Strength Training',
+          start: '2026-10-05 07:00:00 +1000',
+          end: '2026-10-05 07:30:00 +1000',
+          duration: 1800,
+          activeEnergyBurned: { qty: 200, units: 'kcal' },
+        },
+      ],
+      metrics: [
+        {
+          name: 'active_energy',
+          units: 'kJ',
+          data: [
+            { date: '2026-10-04 00:00:00 +1000', qty: 1000 },
+            { date: '2026-10-05 00:00:00 +1000', qty: 1100 },
+          ],
+        },
+        {
+          name: 'basal_energy_burned',
+          units: 'kJ',
+          data: [
+            { date: '2026-10-04 00:00:00 +1000', qty: 8000 },
+            { date: '2026-10-05 00:00:00 +1000', qty: 8100 },
+          ],
+        },
+      ],
+    },
+  });
+
+  const firstImport = runHealthImport({ dryRun: false, level: 'summary' }, [source]);
+  assert.equal(firstImport.new_data_day_count, 2);
+
+  const preview = runHealthImport({ dryRun: true, level: 'summary' }, [source]);
+  assert.equal(preview.new_data_day_count, 0);
+  assert.equal(preview.external_workouts_inserted, 0);
+  assert.equal(preview.external_workouts_updated, 0);
+  assert.equal(preview.health_daily_metrics_inserted, 0);
+  assert.equal(preview.health_daily_metrics_updated, 0);
+});
+
+test('nutrition day type uses recorded workouts for past dates and schedule for current or future dates', () => {
+  const mondayTemplateId = db.createTemplate('Monday Plan');
+  const tuesdayTemplateId = db.createTemplate('Tuesday Plan');
+  db.addScheduleEntry(0, mondayTemplateId);
+  db.addScheduleEntry(1, tuesdayTemplateId);
+
+  assert.equal(db.isWorkoutDayForNutrition('2026-04-20', '2026-04-21'), false);
+  db.initWorkoutFromTemplate('2026-04-20', mondayTemplateId);
+  assert.equal(db.isWorkoutDayForNutrition('2026-04-20', '2026-04-21'), true);
+
+  assert.equal(db.isWorkoutDayForNutrition('2026-04-21', '2026-04-21'), true);
+  assert.equal(db.isWorkoutDayForNutrition('2026-04-28', '2026-04-21'), true);
+});
+
 test('newer snapshot updates an existing external workout row', () => {
   const externalId = 'overwrite-workout-test';
   const base = db.upsertExternalWorkout({

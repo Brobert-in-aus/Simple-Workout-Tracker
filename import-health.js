@@ -368,6 +368,82 @@ function buildSummary() {
   };
 }
 
+function valuesEqual(a, b) {
+  if (a == null && b == null) return true;
+  return a === b;
+}
+
+function normalizeLinksForCompare(links) {
+  return (Array.isArray(links) ? links : [])
+    .map(link => ({
+      workout_id: link.workout_id,
+      allocation_ratio: round4(link.allocation_ratio),
+      allocation_method: link.allocation_method,
+      link_order: link.link_order,
+    }))
+    .sort((a, b) => {
+      if (a.link_order !== b.link_order) return a.link_order - b.link_order;
+      if (a.workout_id !== b.workout_id) return a.workout_id - b.workout_id;
+      return String(a.allocation_method).localeCompare(String(b.allocation_method));
+    });
+}
+
+function hasSameExternalWorkoutData(existingExternalId, normalizedWorkout, importLevel, matchStatus, links) {
+  const existing = db.getExternalWorkoutByExternalId(existingExternalId);
+  if (!existing) return false;
+  const existingDetail = db.getExternalWorkoutById(existing.id);
+  if (!existingDetail) return false;
+
+  const sameWorkoutRow =
+    valuesEqual(existing.source_type, normalizedWorkout.sourceType) &&
+    valuesEqual(existing.workout_type, normalizedWorkout.workoutType) &&
+    valuesEqual(existing.name, normalizedWorkout.name) &&
+    valuesEqual(existing.date, normalizedWorkout.date) &&
+    valuesEqual(existing.start_at, normalizedWorkout.startAt) &&
+    valuesEqual(existing.end_at, normalizedWorkout.endAt) &&
+    valuesEqual(existing.duration_seconds, normalizedWorkout.durationSeconds) &&
+    valuesEqual(existing.is_indoor, normalizedWorkout.isIndoor) &&
+    valuesEqual(existing.location_label, normalizedWorkout.locationLabel) &&
+    valuesEqual(existing.import_level, importLevel) &&
+    valuesEqual(existing.match_status, matchStatus);
+
+  const metrics = normalizedWorkout.summary || {};
+  const existingMetrics = existingDetail.metrics || {};
+  const sameMetrics =
+    valuesEqual(existingMetrics.active_energy_kcal, metrics.active_energy_kcal) &&
+    valuesEqual(existingMetrics.avg_heart_rate_bpm, metrics.avg_heart_rate_bpm) &&
+    valuesEqual(existingMetrics.max_heart_rate_bpm, metrics.max_heart_rate_bpm) &&
+    valuesEqual(existingMetrics.min_heart_rate_bpm, metrics.min_heart_rate_bpm) &&
+    valuesEqual(existingMetrics.distance_meters, metrics.distance_meters) &&
+    valuesEqual(existingMetrics.step_count_total, metrics.step_count_total) &&
+    valuesEqual(existingMetrics.avg_step_cadence, metrics.avg_step_cadence) &&
+    valuesEqual(existingMetrics.intensity_avg, metrics.intensity_avg) &&
+    valuesEqual(existingMetrics.temperature_avg, metrics.temperature_avg) &&
+    valuesEqual(existingMetrics.humidity_avg, metrics.humidity_avg) &&
+    valuesEqual(existingMetrics.elevation_up_meters, metrics.elevation_up_meters) &&
+    valuesEqual(existingMetrics.heart_rate_recovery_bpm, metrics.heart_rate_recovery_bpm);
+
+  const sameLinks =
+    JSON.stringify(normalizeLinksForCompare(existingDetail.links)) ===
+    JSON.stringify(normalizeLinksForCompare(links));
+
+  return sameWorkoutRow && sameMetrics && sameLinks;
+}
+
+function hasSameDailyMetricData(existingMetric, metricRow) {
+  if (!existingMetric) return false;
+  return (
+    valuesEqual(existingMetric.source_type, metricRow.sourceType) &&
+    valuesEqual(existingMetric.active_energy_kj, metricRow.activeEnergyKj) &&
+    valuesEqual(existingMetric.resting_energy_kj, metricRow.restingEnergyKj) &&
+    valuesEqual(existingMetric.active_energy_kcal, metricRow.activeEnergyKcal) &&
+    valuesEqual(existingMetric.resting_energy_kcal, metricRow.restingEnergyKcal) &&
+    valuesEqual(existingMetric.tdee_kcal, metricRow.tdeeKcal) &&
+    valuesEqual(existingMetric.sample_count_active, metricRow.sampleCountActive) &&
+    valuesEqual(existingMetric.sample_count_resting, metricRow.sampleCountResting)
+  );
+}
+
 function runHealthImport(options = {}, importSources = null) {
   const settings = {
     dryRun: !!options.dryRun,
@@ -386,6 +462,14 @@ function runHealthImport(options = {}, importSources = null) {
   const database = db.getDb();
   const importFileTxn = database.transaction(fileResult => {
     for (const metricRow of fileResult.dailyMetrics) {
+      const existingMetric = db.getHealthDailyMetricsByDate(metricRow.date);
+      if (
+        existingMetric &&
+        existingMetric.source_snapshot_date === metricRow.sourceSnapshotDate &&
+        hasSameDailyMetricData(existingMetric, metricRow)
+      ) {
+        continue;
+      }
       const metricResult = db.upsertHealthDailyMetrics(metricRow);
       if (metricResult.applied) {
         summary.metric_dates_upserted += 1;
@@ -405,6 +489,14 @@ function runHealthImport(options = {}, importSources = null) {
 
       const { matchStatus, links } = computeLinksAndStatus(normalizedWorkout);
       normalizedWorkout.matchStatus = matchStatus;
+      const existingWorkout = db.getExternalWorkoutByExternalId(normalizedWorkout.externalId);
+      if (
+        existingWorkout &&
+        existingWorkout.source_snapshot_date === normalizedWorkout.sourceSnapshotDate &&
+        hasSameExternalWorkoutData(normalizedWorkout.externalId, normalizedWorkout, settings.level, matchStatus, links)
+      ) {
+        continue;
+      }
       const workoutResult = db.upsertExternalWorkout(normalizedWorkout, settings.level);
       if (!workoutResult.applied) {
         if (workoutResult.stale) summary.external_workouts_skipped_stale += 1;
@@ -502,13 +594,19 @@ function runHealthImport(options = {}, importSources = null) {
           summary.skipped_short_duration += 1;
           continue;
         }
-        const { matchStatus } = computeLinksAndStatus(normalizedWorkout);
+        const { matchStatus, links } = computeLinksAndStatus(normalizedWorkout);
         summary[matchStatus] += 1;
         const existingWorkout = db.getExternalWorkoutByExternalId(normalizedWorkout.externalId);
         if (!existingWorkout) {
           summary.external_workouts_inserted += 1;
           appliedWorkoutDates.add(normalizedWorkout.date);
-        } else if (!existingWorkout.source_snapshot_date || !normalizedWorkout.sourceSnapshotDate || normalizedWorkout.sourceSnapshotDate >= existingWorkout.source_snapshot_date) {
+        } else if (
+          (!existingWorkout.source_snapshot_date || !normalizedWorkout.sourceSnapshotDate || normalizedWorkout.sourceSnapshotDate > existingWorkout.source_snapshot_date) ||
+          (
+            normalizedWorkout.sourceSnapshotDate === existingWorkout.source_snapshot_date &&
+            !hasSameExternalWorkoutData(normalizedWorkout.externalId, normalizedWorkout, settings.level, matchStatus, links)
+          )
+        ) {
           summary.external_workouts_updated += 1;
           appliedWorkoutDates.add(normalizedWorkout.date);
         } else {
@@ -520,7 +618,13 @@ function runHealthImport(options = {}, importSources = null) {
         if (!existingMetric) {
           summary.health_daily_metrics_inserted += 1;
           appliedMetricDates.add(metricRow.date);
-        } else if (!existingMetric.source_snapshot_date || !metricRow.sourceSnapshotDate || metricRow.sourceSnapshotDate >= existingMetric.source_snapshot_date) {
+        } else if (
+          (!existingMetric.source_snapshot_date || !metricRow.sourceSnapshotDate || metricRow.sourceSnapshotDate > existingMetric.source_snapshot_date) ||
+          (
+            metricRow.sourceSnapshotDate === existingMetric.source_snapshot_date &&
+            !hasSameDailyMetricData(existingMetric, metricRow)
+          )
+        ) {
           summary.health_daily_metrics_updated += 1;
           appliedMetricDates.add(metricRow.date);
         } else {

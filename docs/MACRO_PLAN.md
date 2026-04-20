@@ -1,5 +1,9 @@
 # Macro Tracking Plan
 
+## Open Bug
+
+- Re-importing the exact same Apple Health snapshot can still preview as if it contains new data. The import preview should treat an identical already-imported snapshot as `No new data` unless the snapshot is actually newer or contains corrected values that will overwrite existing rows.
+
 ## Purpose
 
 Design and implementation notes for the Nutrition tab: macro tracking, meal templating, and Apple Health-backed TDEE context.

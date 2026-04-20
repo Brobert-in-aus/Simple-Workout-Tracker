@@ -511,6 +511,22 @@ function getScheduleForDate(date) {
   `).all(dayIndex);
 }
 
+function isWorkoutDayForNutrition(date, todayDate = null) {
+  const localToday = todayDate || (() => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  })();
+
+  if (date < localToday) {
+    return getWorkoutsForDate(date).length > 0;
+  }
+
+  return getScheduleForDate(date).length > 0;
+}
+
 // --- Day/Template helpers (kept for backward compat) ---
 
 function getOrCreateDay(dayIndex, name) {
@@ -1593,6 +1609,7 @@ module.exports = {
   addScheduleEntry,
   removeScheduleEntry,
   getScheduleForDate,
+  isWorkoutDayForNutrition,
   // Legacy day helpers
   getOrCreateDay,
   getAllDays,
