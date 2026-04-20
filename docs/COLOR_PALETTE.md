@@ -7,6 +7,7 @@ This document defines the official color palette for the Workout Tracker applica
 | Color Name | Hex Code | RGB | Usage |
 |-----------|----------|-----|-------|
 | Light Blue (Primary) | `#eef2ff` | rgb(238, 242, 255) | Primary backgrounds, set type selector backgrounds |
+| White | `#ffffff` | rgb(255, 255, 255) | Cards, elevated surfaces, high-contrast neutral backgrounds |
 | Medium Blue | `#d6daf0` | rgb(214, 218, 240) | Secondary backgrounds, borders |
 | Cool Grey Blue | `#b7c5d9` | rgb(183, 197, 217) | Tertiary backgrounds, subtle accents |
 | Dark Blue (Headers) | `#0f0c5d` | rgb(15, 12, 93) | Primary text, headers, net weight text |
@@ -38,6 +39,7 @@ The palette can also be defined as CSS custom properties in your main stylesheet
 ```css
 :root {
   --color-primary-light: #eef2ff;
+  --color-white: #ffffff;
   --color-primary-medium: #d6daf0;
   --color-grey-blue: #b7c5d9;
   --color-dark-blue: #0f0c5d;

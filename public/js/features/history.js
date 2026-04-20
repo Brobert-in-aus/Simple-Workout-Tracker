@@ -16,10 +16,11 @@ export async function renderHistorySection(container) {
     html += `<div class="history-week">`;
     html += `<div class="history-week-header">Week of ${formatDate(weekStart)}</div>`;
     for (const workout of workouts) {
+      const isExternal = workout.item_type === 'external_workout';
       html += `
-        <div class="history-item" data-date="${workout.date}">
+        <div class="history-item" data-date="${workout.date}" data-id="${workout.id}" data-item-type="${workout.item_type || 'tracked_workout'}">
           <span class="history-date">${formatDate(workout.date)}</span>
-          <span class="history-day">${workout.day_name}</span>
+          <span class="history-day">${workout.day_name}${isExternal ? ' (Apple Watch)' : ''}</span>
         </div>
       `;
     }
@@ -28,7 +29,13 @@ export async function renderHistorySection(container) {
   container.innerHTML = html;
 
   container.querySelectorAll('.history-item').forEach((item) => {
-    item.addEventListener('click', () => renderHistoryDetail(item.dataset.date, container));
+    item.addEventListener('click', () => {
+      if (item.dataset.itemType === 'external_workout') {
+        renderExternalWorkoutDetail(item.dataset.id, container);
+        return;
+      }
+      renderHistoryDetail(item.dataset.date, container);
+    });
   });
 }
 
@@ -51,6 +58,7 @@ export async function renderHistoryDetail(date, container) {
     if (!workout || workout.preview) continue;
 
     html += `<div class="history-template-header">${workout.template_name || workout.day_name}</div>`;
+    html += renderExternalLinksSummary(workout.external_links || []);
 
     for (const ex of workout.exercises) {
       const exIsDuration = !!ex.is_duration;
@@ -93,6 +101,76 @@ export async function renderHistoryDetail(date, container) {
       const exId = el.dataset.exerciseId;
       if (exId) showProgression(exId, el.textContent);
     });
+  });
+
+  container.querySelectorAll('.history-apple-link-card[data-external-workout-id]').forEach((el) => {
+    el.addEventListener('click', () => {
+      renderExternalWorkoutDetail(el.dataset.externalWorkoutId, container);
+    });
+  });
+}
+
+function renderExternalLinksSummary(externalLinks) {
+  if (!externalLinks || externalLinks.length === 0) return '';
+
+  const itemsHtml = externalLinks.map(link => {
+    const duration = link.derived_summary?.duration_seconds ?? link.duration_seconds ?? 0;
+    const activeEnergy = link.derived_summary?.active_energy_kcal;
+    const summaryBits = [
+      duration > 0 ? formatDuration(duration) : null,
+      activeEnergy != null ? `${activeEnergy} kcal` : null,
+      link.allocation_ratio != null && link.allocation_ratio < 0.9999 ? `${Math.round(link.allocation_ratio * 100)}% allocation` : null,
+    ].filter(Boolean);
+
+    return `
+      <div class="history-apple-link-card" data-external-workout-id="${link.external_workout_id}">
+        <div class="history-apple-link-title">Apple Watch ${link.workout_type}</div>
+        <div class="history-apple-link-summary">${summaryBits.join(' · ') || 'Imported summary available'}</div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="history-apple-summary">
+      <div class="history-apple-summary-header">Apple Watch Summary</div>
+      ${itemsHtml}
+    </div>
+  `;
+}
+
+async function renderExternalWorkoutDetail(id, container) {
+  container.innerHTML = '<div class="progress-loading">Loading...</div>';
+  const workout = await api(`/api/external-workouts/${id}`);
+
+  const metrics = workout.metrics || {};
+  const detailRows = [
+    ['Type', workout.workout_type],
+    ['Started', workout.start_at ? formatDate(workout.date) : workout.date],
+    ['Duration', formatDuration(workout.duration_seconds || 0)],
+    ['Active Energy', metrics.active_energy_kcal != null ? `${Math.round(metrics.active_energy_kcal)} kcal` : null],
+    ['Avg HR', metrics.avg_heart_rate_bpm != null ? `${Math.round(metrics.avg_heart_rate_bpm)} bpm` : null],
+    ['Max HR', metrics.max_heart_rate_bpm != null ? `${Math.round(metrics.max_heart_rate_bpm)} bpm` : null],
+    ['Distance', metrics.distance_meters != null ? `${Math.round(metrics.distance_meters)} m` : null],
+  ].filter(([, value]) => value != null);
+
+  let html = `
+    <button class="btn btn-outline history-back-btn">&larr; Back</button>
+    <h3 style="margin:12px 0">${formatDate(workout.date)}</h3>
+    <div class="history-template-header">Apple Watch ${workout.name}</div>
+  `;
+
+  for (const [label, value] of detailRows) {
+    html += `
+      <div class="history-detail-card">
+        <div class="history-exercise-name">${label}</div>
+        <div class="history-sets">${value}</div>
+      </div>
+    `;
+  }
+
+  container.innerHTML = html;
+  container.querySelector('.history-back-btn').addEventListener('click', () => {
+    renderHistorySection(container);
   });
 }
 

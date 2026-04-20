@@ -6,6 +6,10 @@ const DB_PATH = process.env.WORKOUT_DB_PATH || path.join(__dirname, 'data', 'wor
 
 let db;
 
+function getHealthRawWorkoutsDir() {
+  return path.join(path.dirname(DB_PATH), 'health-raw', 'workouts');
+}
+
 function getDb() {
   if (!db) {
     const fs = require('fs');
@@ -111,8 +115,84 @@ function initSchema() {
       carbs_g          REAL    NOT NULL DEFAULT 0,
       fat_g            REAL    NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS external_workouts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_type TEXT NOT NULL,
+      external_id TEXT NOT NULL UNIQUE,
+      workout_type TEXT NOT NULL,
+      name TEXT NOT NULL,
+      date TEXT NOT NULL,
+      start_at TEXT NOT NULL,
+      end_at TEXT NOT NULL,
+      duration_seconds INTEGER NOT NULL,
+      is_indoor INTEGER,
+      location_label TEXT,
+      import_source_file TEXT NOT NULL,
+      source_snapshot_date TEXT,
+      imported_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      import_level TEXT NOT NULL,
+      match_status TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS external_workout_metrics (
+      external_workout_id INTEGER PRIMARY KEY REFERENCES external_workouts(id) ON DELETE CASCADE,
+      active_energy_kcal REAL,
+      avg_heart_rate_bpm REAL,
+      max_heart_rate_bpm REAL,
+      min_heart_rate_bpm REAL,
+      distance_meters REAL,
+      step_count_total REAL,
+      avg_step_cadence REAL,
+      intensity_avg REAL,
+      temperature_avg REAL,
+      humidity_avg REAL,
+      elevation_up_meters REAL,
+      heart_rate_recovery_bpm REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS external_workout_raw (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      external_workout_id INTEGER NOT NULL REFERENCES external_workouts(id) ON DELETE CASCADE,
+      metric_key TEXT NOT NULL,
+      json_payload TEXT NOT NULL,
+      UNIQUE(external_workout_id, metric_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS external_workout_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      external_workout_id INTEGER NOT NULL REFERENCES external_workouts(id) ON DELETE CASCADE,
+      workout_id INTEGER NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
+      link_kind TEXT NOT NULL,
+      link_order INTEGER NOT NULL DEFAULT 0,
+      allocation_ratio REAL NOT NULL,
+      allocation_method TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(external_workout_id, workout_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS health_daily_metrics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL UNIQUE,
+      source_type TEXT NOT NULL,
+      active_energy_kj REAL,
+      resting_energy_kj REAL,
+      active_energy_kcal REAL,
+      resting_energy_kcal REAL,
+      tdee_kcal REAL,
+      sample_count_active INTEGER NOT NULL DEFAULT 0,
+      sample_count_resting INTEGER NOT NULL DEFAULT 0,
+      import_source_file TEXT NOT NULL,
+      source_snapshot_date TEXT,
+      imported_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
   db.exec('CREATE INDEX IF NOT EXISTS idx_macro_logs_date ON macro_logs(date)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_external_workouts_date_type ON external_workouts(date, workout_type)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_external_workouts_match_status ON external_workouts(match_status)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_health_daily_metrics_updated_at ON health_daily_metrics(updated_at)');
 
   // --- Migrations ---
 
@@ -245,6 +325,18 @@ function initSchema() {
       db.prepare("INSERT INTO _migrations (name) VALUES ('sync_linked_exercises')").run();
     });
     txn();
+  }
+
+  // Migration: add source_snapshot_date columns for snapshot-recency conflict handling
+  try {
+    db.prepare("SELECT source_snapshot_date FROM external_workouts LIMIT 1").get();
+  } catch (e) {
+    db.exec("ALTER TABLE external_workouts ADD COLUMN source_snapshot_date TEXT");
+  }
+  try {
+    db.prepare("SELECT source_snapshot_date FROM health_daily_metrics LIMIT 1").get();
+  } catch (e) {
+    db.exec("ALTER TABLE health_daily_metrics ADD COLUMN source_snapshot_date TEXT");
   }
 }
 
@@ -912,12 +1004,7 @@ function getExerciseHistoryWithSets(exerciseId, limit = 8) {
 }
 
 function getAllWorkoutDates() {
-  return db.prepare(`
-    SELECT w.date, w.id, d.name as day_name, d.day_index
-    FROM workouts w
-    JOIN days d ON d.id = w.day_id
-    ORDER BY w.date DESC
-  `).all();
+  return getMergedHistoryItems();
 }
 
 function getWorkoutDatesInRange(fromDate, toDate) {
@@ -1114,17 +1201,357 @@ function deleteMacroLog(id) {
   db.prepare('DELETE FROM macro_logs WHERE id = ?').run(id);
 }
 
-function getDailyTdee(date) {
-  // Returns TDEE (BMR + active energy) in kcal for the given date,
-  // or null if no data exists (health_daily_metrics table may not exist yet).
-  try {
-    const row = db.prepare(
-      'SELECT bmr_kcal + active_energy_kcal AS tdee_kcal FROM health_daily_metrics WHERE date = ?'
-    ).get(date);
-    return row ? Math.round(row.tdee_kcal) : null;
-  } catch (e) {
-    return null; // table doesn't exist yet — Phase 2 feature
+// --- Apple Health / external workout helpers ---
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function isSnapshotNewEnough(existingSnapshotDate, incomingSnapshotDate) {
+  if (!incomingSnapshotDate) return true;
+  if (!existingSnapshotDate) return true;
+  return incomingSnapshotDate >= existingSnapshotDate;
+}
+
+function getExternalWorkoutByExternalId(externalId) {
+  return db.prepare('SELECT * FROM external_workouts WHERE external_id = ?').get(externalId) || null;
+}
+
+function upsertExternalWorkout(normalizedWorkout, importLevel) {
+  const timestamp = nowIso();
+  const existing = getExternalWorkoutByExternalId(normalizedWorkout.externalId);
+
+  if (existing) {
+    if (!isSnapshotNewEnough(existing.source_snapshot_date, normalizedWorkout.sourceSnapshotDate)) {
+      return { id: existing.id, applied: false, inserted: false, stale: true };
+    }
+    db.prepare(`
+      UPDATE external_workouts
+      SET source_type = ?, workout_type = ?, name = ?, date = ?, start_at = ?, end_at = ?,
+          duration_seconds = ?, is_indoor = ?, location_label = ?, import_source_file = ?,
+          source_snapshot_date = ?,
+          updated_at = ?, import_level = ?, match_status = ?
+      WHERE id = ?
+    `).run(
+      normalizedWorkout.sourceType,
+      normalizedWorkout.workoutType,
+      normalizedWorkout.name,
+      normalizedWorkout.date,
+      normalizedWorkout.startAt,
+      normalizedWorkout.endAt,
+      normalizedWorkout.durationSeconds,
+      normalizedWorkout.isIndoor,
+      normalizedWorkout.locationLabel,
+      normalizedWorkout.sourceFile,
+      normalizedWorkout.sourceSnapshotDate ?? null,
+      timestamp,
+      importLevel,
+      normalizedWorkout.matchStatus,
+      existing.id
+    );
+    return { id: existing.id, applied: true, inserted: false, stale: false };
   }
+
+  const info = db.prepare(`
+    INSERT INTO external_workouts (
+      source_type, external_id, workout_type, name, date, start_at, end_at,
+      duration_seconds, is_indoor, location_label, import_source_file, source_snapshot_date,
+      imported_at, updated_at, import_level, match_status
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    normalizedWorkout.sourceType,
+    normalizedWorkout.externalId,
+    normalizedWorkout.workoutType,
+    normalizedWorkout.name,
+    normalizedWorkout.date,
+    normalizedWorkout.startAt,
+    normalizedWorkout.endAt,
+    normalizedWorkout.durationSeconds,
+    normalizedWorkout.isIndoor,
+    normalizedWorkout.locationLabel,
+    normalizedWorkout.sourceFile,
+    normalizedWorkout.sourceSnapshotDate ?? null,
+    timestamp,
+    timestamp,
+    importLevel,
+    normalizedWorkout.matchStatus
+  );
+  return { id: info.lastInsertRowid, applied: true, inserted: true, stale: false };
+}
+
+function replaceExternalWorkoutMetrics(externalWorkoutId, metrics) {
+  db.prepare('DELETE FROM external_workout_metrics WHERE external_workout_id = ?').run(externalWorkoutId);
+  db.prepare(`
+    INSERT INTO external_workout_metrics (
+      external_workout_id, active_energy_kcal, avg_heart_rate_bpm, max_heart_rate_bpm,
+      min_heart_rate_bpm, distance_meters, step_count_total, avg_step_cadence,
+      intensity_avg, temperature_avg, humidity_avg, elevation_up_meters,
+      heart_rate_recovery_bpm
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    externalWorkoutId,
+    metrics.active_energy_kcal ?? null,
+    metrics.avg_heart_rate_bpm ?? null,
+    metrics.max_heart_rate_bpm ?? null,
+    metrics.min_heart_rate_bpm ?? null,
+    metrics.distance_meters ?? null,
+    metrics.step_count_total ?? null,
+    metrics.avg_step_cadence ?? null,
+    metrics.intensity_avg ?? null,
+    metrics.temperature_avg ?? null,
+    metrics.humidity_avg ?? null,
+    metrics.elevation_up_meters ?? null,
+    metrics.heart_rate_recovery_bpm ?? null
+  );
+}
+
+function replaceExternalWorkoutRaw(externalWorkoutId, rawMap) {
+  db.prepare('DELETE FROM external_workout_raw WHERE external_workout_id = ?').run(externalWorkoutId);
+  const existing = getExternalWorkoutById(externalWorkoutId);
+  if (!existing) return;
+
+  const fs = require('fs');
+  const rawDir = getHealthRawWorkoutsDir();
+  if (!fs.existsSync(rawDir)) fs.mkdirSync(rawDir, { recursive: true });
+
+  const safeExternalId = String(existing.external_id).replace(/[^A-Za-z0-9._-]/g, '_');
+  const relativePath = path.join('health-raw', 'workouts', `${safeExternalId}.json`);
+  const absolutePath = path.join(path.dirname(DB_PATH), relativePath);
+
+  if (!rawMap || Object.keys(rawMap).length === 0) {
+    if (fs.existsSync(absolutePath)) fs.unlinkSync(absolutePath);
+    return;
+  }
+
+  const payload = {
+    external_id: existing.external_id,
+    external_workout_id: externalWorkoutId,
+    stored_at: nowIso(),
+    metrics: rawMap,
+  };
+  fs.writeFileSync(absolutePath, JSON.stringify(payload, null, 2), 'utf8');
+
+  db.prepare(`
+    INSERT INTO external_workout_raw (external_workout_id, metric_key, json_payload)
+    VALUES (?, ?, ?)
+  `).run(externalWorkoutId, 'workout_file', JSON.stringify({ relative_path: relativePath }));
+}
+
+function replaceExternalWorkoutLinks(externalWorkoutId, links) {
+  db.prepare('DELETE FROM external_workout_links WHERE external_workout_id = ?').run(externalWorkoutId);
+  if (!Array.isArray(links) || links.length === 0) return;
+
+  const createdAt = nowIso();
+  const insert = db.prepare(`
+    INSERT INTO external_workout_links (
+      external_workout_id, workout_id, link_kind, link_order,
+      allocation_ratio, allocation_method, created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const link of links) {
+    insert.run(
+      externalWorkoutId,
+      link.workout_id,
+      link.link_kind || 'strength_sync',
+      link.link_order ?? 0,
+      link.allocation_ratio,
+      link.allocation_method,
+      createdAt
+    );
+  }
+}
+
+function getTrackedWorkoutAllocationInputs(date) {
+  return db.prepare(`
+    SELECT
+      w.id AS workout_id,
+      COUNT(DISTINCT CASE WHEN we.skipped = 0 THEN we.id END) AS exercise_count,
+      COUNT(CASE WHEN ws.completed = 1 THEN ws.id END) AS completed_set_count
+    FROM workouts w
+    LEFT JOIN workout_exercises we ON we.workout_id = w.id
+    LEFT JOIN workout_sets ws ON ws.workout_exercise_id = we.id
+    WHERE w.date = ?
+    GROUP BY w.id
+    ORDER BY w.id
+  `).all(date);
+}
+
+function getExternalWorkoutsByDate(date) {
+  return db.prepare(`
+    SELECT ew.*, ewm.active_energy_kcal, ewm.avg_heart_rate_bpm, ewm.max_heart_rate_bpm,
+           ewm.min_heart_rate_bpm, ewm.distance_meters
+    FROM external_workouts ew
+    LEFT JOIN external_workout_metrics ewm ON ewm.external_workout_id = ew.id
+    WHERE ew.date = ?
+    ORDER BY ew.start_at ASC, ew.id ASC
+  `).all(date);
+}
+
+function getExternalWorkoutLinksForWorkout(workoutId) {
+  return db.prepare(`
+    SELECT ewl.*, ew.external_id, ew.workout_type, ew.start_at, ew.end_at, ew.duration_seconds,
+           ewm.active_energy_kcal
+    FROM external_workout_links ewl
+    JOIN external_workouts ew ON ew.id = ewl.external_workout_id
+    LEFT JOIN external_workout_metrics ewm ON ewm.external_workout_id = ew.id
+    WHERE ewl.workout_id = ?
+    ORDER BY ew.start_at ASC, ewl.link_order ASC
+  `).all(workoutId);
+}
+
+function getUnmatchedExternalStrengthWorkouts() {
+  return db.prepare(`
+    SELECT ew.*, ewm.active_energy_kcal, ewm.avg_heart_rate_bpm, ewm.max_heart_rate_bpm
+    FROM external_workouts ew
+    LEFT JOIN external_workout_metrics ewm ON ewm.external_workout_id = ew.id
+    WHERE ew.workout_type = 'Functional Strength Training'
+      AND ew.match_status = 'unmatched_strength'
+    ORDER BY ew.date DESC, ew.start_at DESC
+  `).all();
+}
+
+function getExternalWorkoutById(id) {
+  const workout = db.prepare('SELECT * FROM external_workouts WHERE id = ?').get(id);
+  if (!workout) return null;
+  workout.metrics = db.prepare('SELECT * FROM external_workout_metrics WHERE external_workout_id = ?').get(id) || null;
+  workout.links = db.prepare(`
+    SELECT ewl.*, w.date, d.name AS day_name
+    FROM external_workout_links ewl
+    JOIN workouts w ON w.id = ewl.workout_id
+    JOIN days d ON d.id = w.day_id
+    WHERE ewl.external_workout_id = ?
+    ORDER BY ewl.link_order ASC, ewl.id ASC
+  `).all(id);
+  return workout;
+}
+
+function getMergedHistoryItems() {
+  const tracked = db.prepare(`
+    SELECT
+      w.date,
+      w.id,
+      d.name AS day_name,
+      d.day_index,
+      'tracked_workout' AS item_type
+    FROM workouts w
+    JOIN days d ON d.id = w.day_id
+  `).all();
+
+  const standaloneExternal = db.prepare(`
+    SELECT
+      ew.date,
+      ew.id,
+      ew.name AS day_name,
+      NULL AS day_index,
+      'external_workout' AS item_type
+    FROM external_workouts ew
+    WHERE ew.match_status = 'imported_standalone'
+  `).all();
+
+  return [...tracked, ...standaloneExternal]
+    .sort((a, b) => {
+      if (a.date === b.date) return a.id - b.id;
+      return a.date < b.date ? 1 : -1;
+    });
+}
+
+function upsertHealthDailyMetrics(metricRow) {
+  const timestamp = nowIso();
+  const existing = getHealthDailyMetricsByDate(metricRow.date);
+  if (existing) {
+    if (!isSnapshotNewEnough(existing.source_snapshot_date, metricRow.sourceSnapshotDate)) {
+      return { applied: false, inserted: false, stale: true };
+    }
+    db.prepare(`
+      UPDATE health_daily_metrics
+      SET source_type = ?, active_energy_kj = ?, resting_energy_kj = ?, active_energy_kcal = ?,
+          resting_energy_kcal = ?, tdee_kcal = ?, sample_count_active = ?, sample_count_resting = ?,
+          import_source_file = ?, source_snapshot_date = ?, updated_at = ?
+      WHERE date = ?
+    `).run(
+      metricRow.sourceType || 'apple_health',
+      metricRow.activeEnergyKj ?? null,
+      metricRow.restingEnergyKj ?? null,
+      metricRow.activeEnergyKcal ?? null,
+      metricRow.restingEnergyKcal ?? null,
+      metricRow.tdeeKcal ?? null,
+      metricRow.sampleCountActive ?? 0,
+      metricRow.sampleCountResting ?? 0,
+      metricRow.sourceFile,
+      metricRow.sourceSnapshotDate ?? null,
+      timestamp,
+      metricRow.date
+    );
+    return { applied: true, inserted: false, stale: false };
+  }
+
+  db.prepare(`
+    INSERT INTO health_daily_metrics (
+      date, source_type, active_energy_kj, resting_energy_kj, active_energy_kcal,
+      resting_energy_kcal, tdee_kcal, sample_count_active, sample_count_resting,
+      import_source_file, source_snapshot_date, imported_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    metricRow.date,
+    metricRow.sourceType || 'apple_health',
+    metricRow.activeEnergyKj ?? null,
+    metricRow.restingEnergyKj ?? null,
+    metricRow.activeEnergyKcal ?? null,
+    metricRow.restingEnergyKcal ?? null,
+    metricRow.tdeeKcal ?? null,
+    metricRow.sampleCountActive ?? 0,
+    metricRow.sampleCountResting ?? 0,
+    metricRow.sourceFile,
+    metricRow.sourceSnapshotDate ?? null,
+    timestamp,
+    timestamp
+  );
+  return { applied: true, inserted: true, stale: false };
+}
+
+function getHealthDailyMetricsByDate(date) {
+  return db.prepare('SELECT * FROM health_daily_metrics WHERE date = ?').get(date) || null;
+}
+
+function getHealthDailyMetricsRange(startDate, endDate) {
+  return db.prepare(`
+    SELECT * FROM health_daily_metrics
+    WHERE date >= ? AND date <= ?
+    ORDER BY date ASC
+  `).all(startDate, endDate);
+}
+
+function deleteHealthDailyMetricsByDate(date) {
+  db.prepare('DELETE FROM health_daily_metrics WHERE date = ?').run(date);
+}
+
+function getRecentHealthDailyMetrics(limit = 14) {
+  return db.prepare(`
+    SELECT * FROM health_daily_metrics
+    ORDER BY date DESC
+    LIMIT ?
+  `).all(limit);
+}
+
+function getMacroTdeeContextForDate(date) {
+  const row = getHealthDailyMetricsByDate(date);
+  if (!row) return null;
+  return {
+    date: row.date,
+    active_energy_kcal: row.active_energy_kcal,
+    resting_energy_kcal: row.resting_energy_kcal,
+    tdee_kcal: row.tdee_kcal,
+  };
+}
+
+function getDailyTdee(date) {
+  const row = getHealthDailyMetricsByDate(date);
+  return row && row.tdee_kcal != null ? Math.round(row.tdee_kcal) : null;
 }
 
 // Create a weekly backup of the DB if one doesn't already exist for the current week.
@@ -1229,6 +1656,24 @@ module.exports = {
   createMacroLog,
   updateMacroLog,
   deleteMacroLog,
+  // Apple Health / external workouts
+  upsertExternalWorkout,
+  replaceExternalWorkoutMetrics,
+  replaceExternalWorkoutRaw,
+  replaceExternalWorkoutLinks,
+  getTrackedWorkoutAllocationInputs,
+  getExternalWorkoutByExternalId,
+  getExternalWorkoutsByDate,
+  getExternalWorkoutLinksForWorkout,
+  getUnmatchedExternalStrengthWorkouts,
+  getExternalWorkoutById,
+  getMergedHistoryItems,
+  upsertHealthDailyMetrics,
+  getHealthDailyMetricsByDate,
+  getHealthDailyMetricsRange,
+  deleteHealthDailyMetricsByDate,
+  getRecentHealthDailyMetrics,
+  getMacroTdeeContextForDate,
   // TDEE / health metrics
   getDailyTdee,
 };

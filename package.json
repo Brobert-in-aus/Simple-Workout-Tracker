@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node server.js",
     "import": "node import.js",
+    "import:health": "node import-health.js",
     "test": "node --test \"test/*.test.js\""
   },
   "keywords": [],

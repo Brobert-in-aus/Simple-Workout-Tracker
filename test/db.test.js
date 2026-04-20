@@ -16,6 +16,7 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-smoke-'));
 process.env.WORKOUT_DB_PATH = path.join(tmpDir, 'test.db');
 
 const db = require('../database');
+const { runHealthImport, normalizeImportSource, validateImportSourceRoot } = require('../import-health');
 db.getDb(); // initialise schema
 
 test.after(() => {
@@ -279,4 +280,338 @@ test('bodyweight helpers insert, upsert, list, and delete', () => {
   rows = db.getBodyWeights();
   assert.equal(rows.length, 2);
   assert.ok(!rows.some(r => r.date === '2026-01-12'));
+});
+
+test('health daily metrics upsert and TDEE lookup work by date', () => {
+  db.upsertHealthDailyMetrics({
+    date: '2026-04-20',
+    sourceType: 'apple_health',
+    activeEnergyKj: 3200,
+    restingEnergyKj: 8400,
+    activeEnergyKcal: 764.8,
+    restingEnergyKcal: 2007.6,
+    tdeeKcal: 2772.4,
+    sampleCountActive: 1,
+    sampleCountResting: 1,
+    sourceFile: 'sample.json',
+  });
+
+  let row = db.getHealthDailyMetricsByDate('2026-04-20');
+  assert.equal(row.sample_count_active, 1);
+  assert.equal(db.getDailyTdee('2026-04-20'), 2772);
+
+  db.upsertHealthDailyMetrics({
+    date: '2026-04-20',
+    sourceType: 'apple_health',
+    activeEnergyKj: 4000,
+    restingEnergyKj: 8000,
+    activeEnergyKcal: 956.0,
+    restingEnergyKcal: 1912.0,
+    tdeeKcal: 2868.0,
+    sampleCountActive: 2,
+    sampleCountResting: 2,
+    sourceFile: 'sample-2.json',
+  });
+
+  row = db.getHealthDailyMetricsByDate('2026-04-20');
+  assert.equal(row.import_source_file, 'sample-2.json');
+  assert.equal(row.sample_count_active, 2);
+  assert.equal(db.getDailyTdee('2026-04-20'), 2868);
+});
+
+test('merged history includes standalone external workouts', () => {
+  const { templateId } = buildTemplate('Smoke-History-Tracked', [
+    { name: 'Smoke History Lift', targetSets: 3, targetReps: '8' },
+  ]);
+  db.initWorkoutFromTemplate('2026-06-01', templateId);
+
+  const externalResult = db.upsertExternalWorkout({
+    sourceType: 'apple_health',
+    externalId: 'ext-standalone-1',
+    workoutType: 'Indoor Walk',
+    name: 'Indoor Walk',
+    date: '2026-06-02',
+    startAt: '2026-06-02T08:00:00+10:00',
+    endAt: '2026-06-02T08:30:00+10:00',
+    durationSeconds: 1800,
+    isIndoor: 1,
+    locationLabel: 'Indoor',
+    sourceFile: 'sample.json',
+    matchStatus: 'imported_standalone',
+  }, 'summary');
+  db.replaceExternalWorkoutMetrics(externalResult.id, { active_energy_kcal: 200 });
+
+  const history = db.getAllWorkoutDates();
+  assert.ok(history.some(item => item.item_type === 'tracked_workout' && item.date === '2026-06-01'));
+  assert.ok(history.some(item => item.item_type === 'external_workout' && item.date === '2026-06-02'));
+});
+
+test('full raw workout storage writes a JSON file into the health-raw/workouts subfolder', () => {
+  const externalResult = db.upsertExternalWorkout({
+    sourceType: 'apple_health',
+    externalId: 'raw-storage-test',
+    workoutType: 'Indoor Walk',
+    name: 'Indoor Walk',
+    date: '2026-06-03',
+    startAt: '2026-06-03T08:00:00+10:00',
+    endAt: '2026-06-03T08:30:00+10:00',
+    durationSeconds: 1800,
+    isIndoor: 1,
+    locationLabel: 'Indoor',
+    sourceFile: 'sample.json',
+    matchStatus: 'imported_standalone',
+  }, 'full');
+
+  db.replaceExternalWorkoutRaw(externalResult.id, {
+    heartRateData: [{ Avg: 120, date: '2026-06-03 08:01:00 +1000' }],
+    activeEnergy: [{ qty: 10, units: 'kJ', date: '2026-06-03 08:01:00 +1000' }],
+  });
+
+  const rawFile = path.join(tmpDir, 'health-raw', 'workouts', 'raw-storage-test.json');
+  assert.ok(fs.existsSync(rawFile), 'expected raw workout JSON file to exist');
+
+  const payload = JSON.parse(fs.readFileSync(rawFile, 'utf8'));
+  assert.equal(payload.external_id, 'raw-storage-test');
+  assert.ok(Array.isArray(payload.metrics.heartRateData));
+
+  const refRow = db.getDb()
+    .prepare('SELECT metric_key, json_payload FROM external_workout_raw WHERE external_workout_id = ?')
+    .get(externalResult.id);
+  assert.equal(refRow.metric_key, 'workout_file');
+  assert.ok(JSON.parse(refRow.json_payload).relative_path.includes(path.join('health-raw', 'workouts')));
+});
+
+test('uploaded snapshot import skips the latest metric date in the file', () => {
+  const source = normalizeImportSource('upload.json', {
+    data: {
+      workouts: [],
+      metrics: [
+        {
+          name: 'active_energy',
+          units: 'kJ',
+          data: [
+            { date: '2026-04-18 00:00:00 +1000', qty: 1000 },
+            { date: '2026-04-19 00:00:00 +1000', qty: 1100 },
+          ],
+        },
+        {
+          name: 'basal_energy_burned',
+          units: 'kJ',
+          data: [
+            { date: '2026-04-18 00:00:00 +1000', qty: 8000 },
+            { date: '2026-04-19 00:00:00 +1000', qty: 8100 },
+          ],
+        },
+      ],
+    },
+  });
+
+  const summary = runHealthImport({ dryRun: false, level: 'summary' }, [source]);
+  assert.equal(summary.metric_dates_aggregated, 1);
+  assert.deepEqual(summary.latest_metric_dates_skipped, ['2026-04-19']);
+  assert.equal(summary.metric_dates_skipped_latest, 1);
+  assert.equal(db.getHealthDailyMetricsByDate('2026-04-19'), null);
+  assert.ok(db.getHealthDailyMetricsByDate('2026-04-18'));
+});
+
+test('validateImportSourceRoot rejects wrong-shape uploads clearly', () => {
+  assert.throws(
+    () => validateImportSourceRoot({ hello: 'world' }),
+    /missing both data\.workouts and data\.metrics/i
+  );
+  assert.throws(
+    () => validateImportSourceRoot({ data: { workouts: 'nope' } }),
+    /invalid data\.workouts/i
+  );
+});
+
+test('newer snapshot updates an existing daily metric row while older snapshot is skipped as stale', () => {
+  const newer = normalizeImportSource('newer.json', {
+    data: {
+      workouts: [],
+      metrics: [
+        {
+          name: 'active_energy',
+          units: 'kJ',
+          data: [
+            { date: '2026-07-18 00:00:00 +1000', qty: 1200 },
+            { date: '2026-07-21 00:00:00 +1000', qty: 1300 },
+          ],
+        },
+        {
+          name: 'basal_energy_burned',
+          units: 'kJ',
+          data: [
+            { date: '2026-07-18 00:00:00 +1000', qty: 8200 },
+            { date: '2026-07-21 00:00:00 +1000', qty: 8300 },
+          ],
+        },
+      ],
+    },
+  });
+  const older = normalizeImportSource('older.json', {
+    data: {
+      workouts: [],
+      metrics: [
+        {
+          name: 'active_energy',
+          units: 'kJ',
+          data: [
+            { date: '2026-07-18 00:00:00 +1000', qty: 900 },
+            { date: '2026-07-20 00:00:00 +1000', qty: 800 },
+          ],
+        },
+        {
+          name: 'basal_energy_burned',
+          units: 'kJ',
+          data: [
+            { date: '2026-07-18 00:00:00 +1000', qty: 7800 },
+            { date: '2026-07-20 00:00:00 +1000', qty: 7700 },
+          ],
+        },
+      ],
+    },
+  });
+
+  const firstSummary = runHealthImport({ dryRun: false, level: 'summary' }, [newer]);
+  assert.equal(firstSummary.health_daily_metrics_inserted, 1);
+  const before = db.getHealthDailyMetricsByDate('2026-07-18');
+  assert.equal(before.source_snapshot_date, '2026-07-21');
+
+  const secondSummary = runHealthImport({ dryRun: false, level: 'summary' }, [older]);
+  const after = db.getHealthDailyMetricsByDate('2026-07-18');
+  assert.equal(secondSummary.health_daily_metrics_skipped_stale, 1);
+  assert.equal(after.source_snapshot_date, '2026-07-21');
+  assert.equal(after.active_energy_kj, before.active_energy_kj);
+});
+
+test('dry-run summary reports distinct new-data days across workouts and metrics', () => {
+  const source = normalizeImportSource('summary-days.json', {
+    data: {
+      workouts: [
+        {
+          id: 'summary-workout-1',
+          name: 'Outdoor Walk',
+          start: '2026-08-03 07:00:00 +1000',
+          end: '2026-08-03 07:30:00 +1000',
+          duration: 1800,
+          activeEnergyBurned: { qty: 250, units: 'kcal' },
+        },
+      ],
+      metrics: [
+        {
+          name: 'active_energy',
+          units: 'kJ',
+          data: [
+            { date: '2026-08-02 00:00:00 +1000', qty: 1200 },
+            { date: '2026-08-03 00:00:00 +1000', qty: 1300 },
+          ],
+        },
+        {
+          name: 'basal_energy_burned',
+          units: 'kJ',
+          data: [
+            { date: '2026-08-02 00:00:00 +1000', qty: 8200 },
+            { date: '2026-08-03 00:00:00 +1000', qty: 8300 },
+          ],
+        },
+      ],
+    },
+  });
+
+  const summary = runHealthImport({ dryRun: true, level: 'summary' }, [source]);
+  assert.equal(summary.new_data_day_count, 2);
+  assert.equal(summary.new_workout_day_count, 1);
+  assert.equal(summary.new_metric_day_count, 1);
+  assert.deepEqual(summary.sample_new_data_dates, ['2026-08-02', '2026-08-03']);
+});
+
+test('dry-run summary shows no new data when snapshot is older than stored rows', () => {
+  db.upsertHealthDailyMetrics({
+    date: '2026-09-02',
+    sourceType: 'apple_health',
+    activeEnergyKj: 1500,
+    restingEnergyKj: 8000,
+    activeEnergyKcal: 358.5,
+    restingEnergyKcal: 1912.0,
+    tdeeKcal: 2270.5,
+    sampleCountActive: 1,
+    sampleCountResting: 1,
+    sourceFile: 'newest.json',
+    sourceSnapshotDate: '2026-09-04',
+  });
+
+  const older = normalizeImportSource('older-preview.json', {
+    data: {
+      workouts: [],
+      metrics: [
+        {
+          name: 'active_energy',
+          units: 'kJ',
+          data: [
+            { date: '2026-09-02 00:00:00 +1000', qty: 900 },
+            { date: '2026-09-03 00:00:00 +1000', qty: 950 },
+          ],
+        },
+        {
+          name: 'basal_energy_burned',
+          units: 'kJ',
+          data: [
+            { date: '2026-09-02 00:00:00 +1000', qty: 7600 },
+            { date: '2026-09-03 00:00:00 +1000', qty: 7700 },
+          ],
+        },
+      ],
+    },
+  });
+
+  const summary = runHealthImport({ dryRun: true, level: 'summary' }, [older]);
+  assert.equal(summary.new_data_day_count, 0);
+  assert.equal(summary.new_workout_day_count, 0);
+  assert.equal(summary.new_metric_day_count, 0);
+  assert.deepEqual(summary.sample_new_data_dates, []);
+  assert.equal(summary.health_daily_metrics_skipped_stale, 1);
+});
+
+test('newer snapshot updates an existing external workout row', () => {
+  const externalId = 'overwrite-workout-test';
+  const base = db.upsertExternalWorkout({
+    sourceType: 'apple_health',
+    externalId,
+    workoutType: 'Indoor Walk',
+    name: 'Indoor Walk',
+    date: '2026-04-18',
+    startAt: '2026-04-18T08:00:00+10:00',
+    endAt: '2026-04-18T08:30:00+10:00',
+    durationSeconds: 1800,
+    isIndoor: 1,
+    locationLabel: 'Indoor',
+    sourceFile: 'older.json',
+    sourceSnapshotDate: '2026-04-18',
+    matchStatus: 'imported_standalone',
+  }, 'summary');
+  assert.equal(base.applied, true);
+
+  const newer = db.upsertExternalWorkout({
+    sourceType: 'apple_health',
+    externalId,
+    workoutType: 'Indoor Walk',
+    name: 'Indoor Walk',
+    date: '2026-04-18',
+    startAt: '2026-04-18T08:00:00+10:00',
+    endAt: '2026-04-18T08:45:00+10:00',
+    durationSeconds: 2700,
+    isIndoor: 1,
+    locationLabel: 'Indoor',
+    sourceFile: 'newer.json',
+    sourceSnapshotDate: '2026-04-19',
+    matchStatus: 'imported_standalone',
+  }, 'summary');
+  assert.equal(newer.applied, true);
+  assert.equal(newer.inserted, false);
+
+  const row = db.getExternalWorkoutByExternalId(externalId);
+  assert.equal(row.duration_seconds, 2700);
+  assert.equal(row.source_snapshot_date, '2026-04-19');
+  assert.equal(row.import_source_file, 'newer.json');
 });

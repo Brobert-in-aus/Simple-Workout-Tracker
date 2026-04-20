@@ -10,7 +10,7 @@ const PROT_RANGE = 15;  // ±g protein to be considered "on target"
 let currentDate = todayStr();
 let templates = null;
 let targets = null;
-let logData = null; // { logs: [], is_workout_day: bool, tdee_kcal: number|null }
+let logData = null; // { logs: [], is_workout_day: bool, tdee_kcal: number|null, health_metrics?: {...} }
 
 // Per-session save tracking (reset on navigation)
 let saveTimers = {};
@@ -95,7 +95,7 @@ function renderContent() {
       ${customLogs.map(log => mealCardHTML(null, log, true)).join('')}
     </div>
     <button class="btn-add-meal" id="nutr-add-custom">+ Add Custom Meal</button>
-    ${totalsHTML(totals, tgt, logData.tdee_kcal)}
+    ${totalsHTML(totals, tgt, logData)}
     <button class="btn-link nutr-settings-btn" id="nutr-settings">&#9881; Meal Settings</button>
   `;
 
@@ -212,6 +212,71 @@ function calcTotals(logs) {
   );
 }
 
+function getEnergyDirection(value) {
+  if (typeof value !== 'number' || value === 0) return 'balance';
+  return value < 0 ? 'deficit' : 'surplus';
+}
+
+function getEnergyTargetFieldMeta(value) {
+  const direction = getEnergyDirection(value);
+  if (direction === 'deficit') {
+    return { label: 'Deficit (kcal)', className: 'target-negative' };
+  }
+  if (direction === 'surplus') {
+    return { label: 'Surplus (kcal)', className: 'target-positive' };
+  }
+  return { label: 'Deficit/Surplus (kcal)', className: '' };
+}
+
+function syncEnergyTargetField(field) {
+  if (!field) return;
+  const wrapper = field.closest('.target-field');
+  const label = wrapper?.querySelector('.energy-target-label');
+  if (!wrapper || !label) return;
+
+  const raw = field.value.trim();
+  const value = raw === '' ? null : parseFloat(raw);
+  const meta = getEnergyTargetFieldMeta(Number.isFinite(value) ? value : null);
+  wrapper.classList.remove('target-negative', 'target-positive');
+  if (meta.className) wrapper.classList.add(meta.className);
+  label.textContent = meta.label;
+}
+
+function getEnergyBalanceDisplay(actualBalance, targetBalance, range) {
+  const targetDirection = getEnergyDirection(targetBalance);
+  const actualDirection = getEnergyDirection(actualBalance);
+
+  if (targetDirection === 'balance') {
+    return {
+      label: actualDirection === 'deficit' ? 'Deficit' : actualDirection === 'surplus' ? 'Surplus' : 'Energy Balance',
+      actualDisplay: actualDirection === 'balance' ? 0 : Math.abs(actualBalance),
+      targetDisplay: null,
+      className: '',
+      note: '',
+    };
+  }
+
+  const targetMagnitude = Math.abs(targetBalance);
+  const sameDirection = actualDirection === targetDirection;
+  const actualMagnitude = sameDirection ? Math.abs(actualBalance) : 0;
+  const className = !sameDirection && actualDirection !== 'balance'
+    ? 'target-high'
+    : Math.abs(actualMagnitude - targetMagnitude) <= range
+      ? 'target-hit'
+      : 'target-low';
+  const note = !sameDirection && actualDirection !== 'balance'
+    ? `(${Math.abs(actualBalance)} kcal ${actualDirection})`
+    : '';
+
+  return {
+    label: targetDirection === 'deficit' ? 'Deficit' : 'Surplus',
+    actualDisplay: actualMagnitude,
+    targetDisplay: targetMagnitude,
+    className,
+    note,
+  };
+}
+
 function targetsBarHTML(tgt, totals) {
   const hasTargets = tgt && (tgt.calories || tgt.protein_g);
   if (!hasTargets) {
@@ -240,7 +305,9 @@ function targetsBarHTML(tgt, totals) {
     </div>`;
 }
 
-function totalsHTML(totals, tgt, tdeeKcal) {
+function totalsHTML(totals, tgt, logData) {
+  const tdeeKcal = logData?.tdee_kcal ?? null;
+  const healthMetrics = logData?.health_metrics ?? null;
   const hasTargets = tgt && (tgt.calories || tgt.protein_g);
   const calClass  = hasTargets ? targetClass(totals.cal,  tgt.calories,  CAL_RANGE)  : '';
   const protClass = hasTargets ? targetClass(totals.prot, tgt.protein_g, PROT_RANGE) : '';
@@ -252,16 +319,32 @@ function totalsHTML(totals, tgt, tdeeKcal) {
 
   let deficitRow = '';
   if (tdeeKcal != null) {
-    const actualDeficit = Math.round(totals.cal) - tdeeKcal;
-    const defTgt        = tgt?.deficit_target ?? null;
-    const defClass      = defTgt != null ? targetClass(actualDeficit, defTgt, CAL_RANGE) : '';
-    const tgtStr        = defTgt != null ? ` / ${defTgt}` : '';
+    const actualBalance = Math.round(totals.cal) - tdeeKcal;
+    const defTgt = tgt?.deficit_target ?? null;
+    const energyDisplay = getEnergyBalanceDisplay(actualBalance, defTgt, CAL_RANGE);
+    const tgtStr = energyDisplay.targetDisplay != null ? ` / ${energyDisplay.targetDisplay}` : '';
+    const noteHtml = energyDisplay.note ? `<span class="totals-note-inline">${energyDisplay.note}</span>` : '';
     deficitRow = `
       <div class="totals-row">
-        <span class="totals-label">Deficit</span>
-        <span class="totals-value ${defClass}">${actualDeficit}${tgtStr} kcal</span>
+        <span class="totals-label">${energyDisplay.label}</span>
+        <span class="totals-value ${energyDisplay.className}">${energyDisplay.actualDisplay}${tgtStr} kcal ${noteHtml}</span>
       </div>`;
   }
+
+  const healthRows = healthMetrics ? `
+      <div class="totals-row">
+        <span class="totals-label">Resting</span>
+        <span class="totals-value">${Math.round(healthMetrics.resting_energy_kcal || 0)} kcal</span>
+      </div>
+      <div class="totals-row">
+        <span class="totals-label">Active</span>
+        <span class="totals-value">${Math.round(healthMetrics.active_energy_kcal || 0)} kcal</span>
+      </div>
+      <div class="totals-row">
+        <span class="totals-label">TDEE</span>
+        <span class="totals-value">${Math.round(healthMetrics.tdee_kcal || 0)} kcal</span>
+      </div>
+  ` : '';
 
   return `
     <div class="nutrition-totals">
@@ -271,6 +354,7 @@ function totalsHTML(totals, tgt, tdeeKcal) {
           <span class="totals-label">${r.label}</span>
           <span class="totals-value ${r.cls}">${r.val}${hasTargets ? ` / ${r.tgtVal}` : ''} ${r.unit}</span>
         </div>`).join('')}
+      ${healthRows}
       ${deficitRow}
     </div>`;
 }
@@ -364,7 +448,7 @@ function updateTotalsDisplay() {
   if (tBar) tBar.outerHTML = targetsBarHTML(tgt, totals);
 
   const tot = document.querySelector('.nutrition-totals');
-  if (tot) tot.outerHTML = totalsHTML(totals, tgt, logData?.tdee_kcal);
+  if (tot) tot.outerHTML = totalsHTML(totals, tgt, logData);
 }
 
 // --- Quick confirm (Option B) ---
@@ -607,6 +691,7 @@ function tmplMacroHTML(field, label, value) {
 
 function targetFieldsHTML(profile, tgt) {
   // carbs_g and fat_g are stored in DB but hidden from UI for now
+  const energyMeta = getEnergyTargetFieldMeta(tgt?.deficit_target ?? null);
   return `
     <div class="target-field">
       <label>Calories (kcal)</label>
@@ -618,10 +703,11 @@ function targetFieldsHTML(profile, tgt) {
       <input type="number" class="target-input" data-profile="${profile}" data-field="protein_g"
              value="${tgt?.protein_g || 0}" min="0" step="1" inputmode="numeric">
     </div>
-    <div class="target-field">
-      <label>Deficit (kcal)</label>
+    <div class="target-field ${energyMeta.className}">
+      <label class="energy-target-label">${energyMeta.label}</label>
       <input type="number" class="target-input" data-profile="${profile}" data-field="deficit_target"
-             value="${tgt?.deficit_target ?? ''}" step="1" inputmode="numeric" placeholder="—">
+             value="${tgt?.deficit_target ?? ''}" step="1" inputmode="numeric" placeholder="Deficit/Surplus">
+      <div class="target-field-hint">Enter negative for a deficit, positive for a surplus.</div>
     </div>`;
 }
 
@@ -664,6 +750,11 @@ function wireSettingsModal(tmpl, tgt) {
     });
     templates = await api('/api/nutrition/templates');
     renderSettingsModal(templates, targets);
+  });
+
+  document.querySelectorAll('.target-input[data-field="deficit_target"]').forEach(inp => {
+    syncEnergyTargetField(inp);
+    inp.addEventListener('input', () => syncEnergyTargetField(inp));
   });
 
   document.getElementById('settings-save-targets').addEventListener('click', async () => {

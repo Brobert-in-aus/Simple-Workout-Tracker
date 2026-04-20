@@ -1,11 +1,13 @@
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const db = require('./database');
+const { runHealthImport, normalizeImportSource, validateImportSourceRoot } = require('./import-health');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Initialize database on startup
@@ -58,6 +60,38 @@ function getBackupStatus() {
     latest_file: latestName,
     latest_created_at: latestStat ? latestStat.mtime.toISOString() : null,
   };
+}
+
+function buildHealthImportStatus() {
+  const sqlite = db.getDb();
+  const statusCounts = sqlite.prepare(`
+    SELECT match_status, COUNT(*) AS count
+    FROM external_workouts
+    GROUP BY match_status
+  `).all();
+  const counts = {
+    matched_single: 0,
+    matched_split: 0,
+    unmatched_strength: 0,
+    imported_standalone: 0,
+  };
+  for (const row of statusCounts) {
+    counts[row.match_status] = row.count;
+  }
+  counts.external_workouts_total = sqlite.prepare('SELECT COUNT(*) AS count FROM external_workouts').get().count;
+  counts.health_daily_metrics_total = sqlite.prepare('SELECT COUNT(*) AS count FROM health_daily_metrics').get().count;
+  return counts;
+}
+
+function archiveUploadedHealthFile(filename, fileContent) {
+  const archiveDir = path.join(__dirname, 'data', 'health-import-uploads');
+  if (!fs.existsSync(archiveDir)) fs.mkdirSync(archiveDir, { recursive: true });
+
+  const safeName = String(filename || 'apple-health.json').replace(/[^A-Za-z0-9._-]/g, '_');
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const archivePath = path.join(archiveDir, `${timestamp}-${safeName}`);
+  fs.writeFileSync(archivePath, fileContent, 'utf8');
+  return archivePath;
 }
 
 // --- Template API ---
@@ -291,8 +325,29 @@ app.get('/api/workout/:date', (req, res) => {
   for (const w of existingWorkouts) {
     const dayExercises = db.getDayExercises(w.day_id);
     const prevData = buildCrossTemplatePrev(dayExercises, w.day_id, date);
+    const externalLinks = db.getExternalWorkoutLinksForWorkout(w.id).map(link => ({
+      external_workout_id: link.external_workout_id,
+      external_id: link.external_id,
+      workout_type: link.workout_type,
+      start_at: link.start_at,
+      end_at: link.end_at,
+      duration_seconds: link.duration_seconds,
+      allocation_ratio: link.allocation_ratio,
+      allocation_method: link.allocation_method,
+      derived_summary: {
+        duration_seconds: Math.round((link.duration_seconds || 0) * (link.allocation_ratio || 0)),
+        active_energy_kcal: link.active_energy_kcal == null ? null : Math.round(link.active_energy_kcal * (link.allocation_ratio || 0)),
+      },
+      full_summary: {
+        duration_seconds: link.duration_seconds,
+        active_energy_kcal: link.active_energy_kcal == null ? null : Math.round(link.active_energy_kcal),
+      },
+    }));
     results.push({
-      workout: w,
+      workout: {
+        ...w,
+        external_links: externalLinks,
+      },
       previous: prevData,
     });
   }
@@ -461,6 +516,121 @@ app.get('/api/history/exercise/:exerciseId', (req, res) => {
   res.json(data);
 });
 
+// --- Apple Health import / external workouts API ---
+
+app.post('/api/import/health', (req, res) => {
+  const { dry_run, level, min_duration_seconds } = req.body || {};
+  try {
+    const summary = runHealthImport({
+      dryRun: !!dry_run,
+      level: level || 'summary',
+      minDuration: parseInt(min_duration_seconds, 10) || undefined,
+    });
+    res.json(summary);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/import/health/upload', (req, res) => {
+  const { filename, file_content, dry_run, level, min_duration_seconds } = req.body || {};
+  if (!file_content || typeof file_content !== 'string') {
+    return res.status(400).json({ error: 'file_content is required' });
+  }
+
+  let root;
+  try {
+    root = JSON.parse(file_content);
+  } catch (error) {
+    return res.status(400).json({ error: 'Uploaded file is not valid JSON' });
+  }
+
+  try {
+    validateImportSourceRoot(root);
+    const source = normalizeImportSource(filename || 'apple-health.json', root);
+    const summary = runHealthImport(
+      {
+        dryRun: !!dry_run,
+        level: level || 'summary',
+        minDuration: parseInt(min_duration_seconds, 10) || undefined,
+      },
+      [source]
+    );
+
+    if (!dry_run) {
+      const archivePath = archiveUploadedHealthFile(filename, file_content);
+      summary.archived_upload_path = path.relative(__dirname, archivePath);
+    }
+
+    res.json(summary);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get('/api/import/health/status', (req, res) => {
+  res.json(buildHealthImportStatus());
+});
+
+app.get('/api/import/health/unmatched', (req, res) => {
+  res.json(db.getUnmatchedExternalStrengthWorkouts());
+});
+
+app.get('/api/workouts/:id/external-links', (req, res) => {
+  const links = db.getExternalWorkoutLinksForWorkout(parseInt(req.params.id)).map(link => ({
+    external_workout_id: link.external_workout_id,
+    external_id: link.external_id,
+    workout_type: link.workout_type,
+    start_at: link.start_at,
+    end_at: link.end_at,
+    duration_seconds: link.duration_seconds,
+    allocation_ratio: link.allocation_ratio,
+    allocation_method: link.allocation_method,
+    derived_summary: {
+      duration_seconds: Math.round((link.duration_seconds || 0) * (link.allocation_ratio || 0)),
+      active_energy_kcal: link.active_energy_kcal == null ? null : Math.round(link.active_energy_kcal * (link.allocation_ratio || 0)),
+    },
+    full_summary: {
+      duration_seconds: link.duration_seconds,
+      active_energy_kcal: link.active_energy_kcal == null ? null : Math.round(link.active_energy_kcal),
+    },
+  }));
+  res.json(links);
+});
+
+app.get('/api/external-workouts', (req, res) => {
+  const { date } = req.query;
+  if (date) return res.json(db.getExternalWorkoutsByDate(date));
+
+  const sqlite = db.getDb();
+  const rows = sqlite.prepare(`
+    SELECT ew.*, ewm.active_energy_kcal, ewm.avg_heart_rate_bpm, ewm.max_heart_rate_bpm,
+           ewm.min_heart_rate_bpm, ewm.distance_meters
+    FROM external_workouts ew
+    LEFT JOIN external_workout_metrics ewm ON ewm.external_workout_id = ew.id
+    ORDER BY ew.date DESC, ew.start_at DESC
+  `).all();
+  res.json(rows);
+});
+
+app.get('/api/external-workouts/:id', (req, res) => {
+  const workout = db.getExternalWorkoutById(parseInt(req.params.id));
+  if (!workout) return res.status(404).json({ error: 'External workout not found' });
+  res.json(workout);
+});
+
+app.get('/api/health/daily-metrics', (req, res) => {
+  const { from, to } = req.query;
+  if (from && to) return res.json(db.getHealthDailyMetricsRange(from, to));
+  res.json(db.getRecentHealthDailyMetrics());
+});
+
+app.get('/api/health/daily-metrics/:date', (req, res) => {
+  const metrics = db.getHealthDailyMetricsByDate(req.params.date);
+  if (!metrics) return res.status(404).json({ error: 'Daily metrics not found' });
+  res.json(metrics);
+});
+
 // --- Body Weight API ---
 
 app.get('/api/body-weight', (req, res) => {
@@ -497,6 +667,11 @@ app.get('/api/export/json', (req, res) => {
     workout_exercises: sqlite.prepare('SELECT * FROM workout_exercises ORDER BY workout_id, sort_order, id').all(),
     workout_sets: sqlite.prepare('SELECT * FROM workout_sets ORDER BY workout_exercise_id, set_number, id').all(),
     body_weights: sqlite.prepare('SELECT * FROM body_weights ORDER BY date, id').all(),
+    external_workouts: sqlite.prepare('SELECT * FROM external_workouts ORDER BY date, start_at, id').all(),
+    external_workout_metrics: sqlite.prepare('SELECT * FROM external_workout_metrics ORDER BY external_workout_id').all(),
+    external_workout_links: sqlite.prepare('SELECT * FROM external_workout_links ORDER BY external_workout_id, link_order, id').all(),
+    external_workout_raw: sqlite.prepare('SELECT * FROM external_workout_raw ORDER BY external_workout_id, id').all(),
+    health_daily_metrics: sqlite.prepare('SELECT * FROM health_daily_metrics ORDER BY date, id').all(),
   };
 
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -562,8 +737,9 @@ app.get('/api/nutrition/logs/:date', (req, res) => {
   const date = req.params.date;
   const logs = db.getMacroLogsForDate(date);
   const workouts = db.getWorkoutsForDate(date);
-  const tdee_kcal = db.getDailyTdee(date);
-  res.json({ logs, is_workout_day: workouts.length > 0, tdee_kcal });
+  const health_metrics = db.getMacroTdeeContextForDate(date);
+  const tdee_kcal = health_metrics?.tdee_kcal != null ? Math.round(health_metrics.tdee_kcal) : null;
+  res.json({ logs, is_workout_day: workouts.length > 0, tdee_kcal, health_metrics });
 });
 
 app.post('/api/nutrition/logs', (req, res) => {

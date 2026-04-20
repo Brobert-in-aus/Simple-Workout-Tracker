@@ -9,6 +9,8 @@ data/workouts.db.prerecovery-*
 data/backups/
 data/OtherBackups/
 data/HealthExport/
+data/health-import-uploads/
+data/health-raw/
 Workout History/
 .claude/
 NUL

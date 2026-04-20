@@ -7,22 +7,22 @@
 :root {
   --bg: #eef2ff;
   --bg-card: #ffffff;
-  --bg-input: #f5f7ff;
+  --bg-input: #eef2ff;
   --accent: #190080;
   --accent-dim: #0f0c5d;
   --text: #0f0c5d;
-  --text-dim: #6b7a99;
+  --text-dim: #b7c5d9;
   --text-warn: #6a0005;
   --success: #117743;
   --border: #d6daf0;
-  --superset-bg: #f0f2ff;
+  --superset-bg: #d6daf0;
   --olive: #7a983a;
   --warmup-bg: #feffee;
   --warmup-text: #6a0005;
   --beige: #ede0d6;
-  --duration-bg: #eef6ff;
-  --duration-text: #1a5276;
-  --success-dim: #0d5e35;
+  --duration-bg: #d6daf0;
+  --duration-text: #0f0c5d;
+  --success-dim: #7a983a;
 }
 
 html, body {
@@ -448,8 +448,8 @@ html, body {
 }
 
 .amrap-toggle.active {
-  background: #e65100;
-  border-color: #e65100;
+  background: var(--accent);
+  border-color: var(--accent);
   color: white;
 }
 
@@ -458,7 +458,7 @@ html, body {
   display: inline-block;
   font-size: 10px;
   font-weight: 700;
-  color: #e65100;
+  color: var(--accent);
   margin-left: 2px;
   vertical-align: super;
 }
@@ -772,14 +772,14 @@ html, body {
 }
 
 .tmpl-amrap-toggle.active {
-  background: #e65100;
-  border-color: #e65100;
+  background: var(--accent);
+  border-color: var(--accent);
   color: white;
 }
 
 .tmpl-amrap-last-toggle.active {
-  background: #ef6c00;
-  border-color: #ef6c00;
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
   color: white;
 }
 
@@ -993,8 +993,8 @@ html, body {
 /* --- AMRAP Badge --- */
 .amrap-badge {
   display: inline-block;
-  background: #fff3e0;
-  color: #e65100;
+  background: var(--border);
+  color: var(--accent);
   font-size: 10px;
   font-weight: 600;
   padding: 2px 8px;
@@ -1779,6 +1779,101 @@ html, body {
   background: var(--bg-input);
 }
 
+.health-import-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.health-import-file {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 10px;
+}
+
+.health-import-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.health-import-file-name {
+  min-width: 0;
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.health-import-error {
+  border: 1px solid var(--text-warn);
+  background: var(--warmup-bg);
+  color: var(--text-warn);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.health-import-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.health-import-actions .btn {
+  flex: 1;
+}
+
+.health-import-preview {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: var(--bg-input);
+}
+
+.health-import-preview-title {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.health-import-preview-subtitle {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.health-import-preview-section {
+  margin-top: 12px;
+}
+
+.health-import-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+
+.health-import-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.health-import-detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+
 /* Content area */
 .progress-content {
   flex: 1;
@@ -1889,6 +1984,47 @@ html, body {
   font-size: 13px;
   color: var(--text-dim);
   padding: 20px 0 8px;
+}
+
+.history-apple-summary {
+  margin: 8px 0 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-input);
+}
+
+.history-apple-summary-header {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+.history-apple-link-card + .history-apple-link-card {
+  margin-top: 8px;
+}
+
+.history-apple-link-card {
+  cursor: pointer;
+}
+
+.history-apple-link-card:active {
+  opacity: 0.8;
+}
+
+.history-apple-link-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.history-apple-link-summary {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--text-dim);
 }
 
 .progress-helper-text {
@@ -2207,12 +2343,12 @@ html, body {
 }
 
 .nutrition-day-badge.training {
-  background: #e8f0fe;
+  background: var(--bg);
   color: var(--accent);
 }
 
 .nutrition-day-badge.rest {
-  background: #f0fff4;
+  background: var(--border);
   color: var(--success);
 }
 
@@ -2269,12 +2405,12 @@ html, body {
 }
 
 /* Target range indicators — applied to text spans and the progress fill */
-.target-hit  { color: #4caf50; }
-.target-low  { color: #f0a500; }
-.target-high { color: #e05050; }
+.target-hit  { color: var(--success); }
+.target-low  { color: var(--olive); }
+.target-high { color: var(--text-warn); }
 
-.targets-progress-fill.target-hit  { background: #4caf50; }
-.targets-progress-fill.target-high { background: #e05050; }
+.targets-progress-fill.target-hit  { background: var(--success); }
+.targets-progress-fill.target-high { background: var(--text-warn); }
 /* target-low on fill: keep accent colour — under target is expected mid-day */
 
 /* Meal cards */
@@ -2476,6 +2612,10 @@ html, body {
   font-size: 14px;
 }
 
+.totals-row-stack {
+  display: block;
+}
+
 .totals-label {
   color: var(--text-dim);
 }
@@ -2483,6 +2623,30 @@ html, body {
 .totals-value {
   font-weight: 600;
   color: var(--text);
+}
+
+.totals-value.target-hit {
+  color: var(--success);
+}
+
+.totals-value.target-low {
+  color: var(--olive);
+}
+
+.totals-value.target-high {
+  color: var(--text-warn);
+}
+
+.totals-note {
+  padding-top: 2px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.totals-note-inline {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-dim);
 }
 
 .nutr-settings-btn {
@@ -2642,6 +2806,31 @@ html, body {
 .target-field input::-webkit-inner-spin-button,
 .target-field input::-webkit-outer-spin-button {
   -webkit-appearance: none;
+}
+
+.target-field.target-negative label {
+  color: var(--text-warn);
+  font-weight: 600;
+}
+
+.target-field.target-negative input {
+  border-color: rgba(106, 0, 5, 0.35);
+}
+
+.target-field.target-positive label {
+  color: var(--olive);
+  font-weight: 600;
+}
+
+.target-field.target-positive input {
+  border-color: rgba(122, 152, 58, 0.45);
+}
+
+.target-field-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.35;
 }
 
 .btn-save-targets {

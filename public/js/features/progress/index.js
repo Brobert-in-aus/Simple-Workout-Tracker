@@ -2,7 +2,7 @@ import { api } from '../../core/api.js';
 import { formatDate, formatDateShort, groupByWeek, shiftDate, toISO, todayStr } from '../../core/dates.js';
 import { state, invalidateBodyCache, invalidateProgressCaches } from '../../core/state.js';
 import { getStrengthFavoriteIds, toggleStrengthFavorite } from '../../core/storage.js';
-import { attachFirstTapCursorEnd, showToast } from '../../core/ui.js';
+import { attachFirstTapCursorEnd, openAppModal, showToast } from '../../core/ui.js';
 import { renderHistorySection } from '../history.js';
 import { buildBarChart, buildLineChart, countWeeksInRange, filterByRange, getRangeBounds, wireExpandableCharts } from './charts.js';
 
@@ -47,6 +47,7 @@ function renderProgressShell(container) {
         <button class="range-btn" data-range="6m">6M</button>
         <button class="range-btn" data-range="1y">1Y</button>
         <button class="range-btn" data-range="all">All</button>
+        <button class="progress-export-btn progress-import-btn" type="button">Import Apple Health</button>
         <button class="progress-export-btn" type="button">Export JSON</button>
       </div>
       <div class="progress-content"></div>
@@ -72,9 +73,195 @@ function renderProgressShell(container) {
     });
   });
 
-  container.querySelector('.progress-export-btn').addEventListener('click', () => {
+  container.querySelector('.progress-export-btn:not(.progress-import-btn)').addEventListener('click', () => {
     window.location.href = '/api/export/json';
   });
+  container.querySelector('.progress-import-btn').addEventListener('click', () => {
+    openHealthImportModal();
+  });
+}
+
+const healthImportState = {
+  filename: '',
+  fileContent: '',
+  preview: null,
+  busy: false,
+  error: '',
+  mode: 'preview',
+};
+
+function buildHealthImportDetailRows(rows) {
+  const visibleRows = rows.filter(row => row.value);
+  if (visibleRows.length === 0) return '';
+  return `
+    <div class="health-import-detail-list">
+      ${visibleRows.map(row => `
+        <div class="health-import-detail-row">
+          <span>${row.label}</span>
+          <strong>${row.value}</strong>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderHealthImportModal() {
+  const preview = healthImportState.preview;
+  const errorHtml = healthImportState.error
+    ? `<div class="health-import-error">${healthImportState.error}</div>`
+    : '';
+  const isImported = healthImportState.mode === 'imported';
+  const summaryTitle = preview
+    ? (preview.new_data_day_count > 0
+      ? `${preview.new_data_day_count} day${preview.new_data_day_count === 1 ? '' : 's'} of new data`
+      : 'No new data')
+    : '';
+  const summarySubtitle = preview
+    ? (preview.new_data_day_count > 0
+      ? `${isImported ? 'Imported' : 'Ready to import'} from ${preview.sample_new_data_dates.join(', ')}${preview.new_data_day_count > preview.sample_new_data_dates.length ? ', ...' : ''}`
+      : `This snapshot is older than or already covered by what is in the database.`)
+    : '';
+  const workoutDetailsHtml = preview ? buildHealthImportDetailRows([
+    { label: 'New workouts', value: preview.external_workouts_inserted },
+    { label: 'Updated workouts', value: preview.external_workouts_updated },
+    { label: 'Skipped as older', value: preview.external_workouts_skipped_stale },
+    { label: 'Standalone Apple workouts', value: preview.imported_standalone },
+    { label: 'Matched single workouts', value: preview.matched_single },
+    { label: 'Matched split workouts', value: preview.matched_split },
+    { label: 'Unmatched strength workouts', value: preview.unmatched_strength },
+  ]) : '';
+  const metricDetailsHtml = preview ? buildHealthImportDetailRows([
+    { label: 'New metric days', value: preview.health_daily_metrics_inserted },
+    { label: 'Updated metric days', value: preview.health_daily_metrics_updated },
+    { label: 'Skipped metric days as older', value: preview.health_daily_metrics_skipped_stale },
+    { label: 'Latest metric date skipped', value: preview.latest_metric_dates_skipped?.[0] || '' },
+  ]) : '';
+  const previewHtml = preview ? `
+    <div class="health-import-preview">
+      <div class="health-import-preview-topline">
+        <div class="health-import-preview-title">${summaryTitle}</div>
+        <div class="health-import-preview-subtitle">${summarySubtitle}</div>
+      </div>
+      ${workoutDetailsHtml ? `
+        <div class="health-import-preview-section">
+          <div class="health-import-section-title">Workouts</div>
+          ${workoutDetailsHtml}
+        </div>
+      ` : ''}
+      ${metricDetailsHtml ? `
+        <div class="health-import-preview-section">
+          <div class="health-import-section-title">Daily energy</div>
+          ${metricDetailsHtml}
+        </div>
+      ` : ''}
+      <div class="progress-helper-text">Uploads are treated as snapshots. Older snapshots do not overwrite newer imported rows.</div>
+    </div>
+  ` : '<div class="chart-empty">Choose an Apple Health export JSON to check for new data.</div>';
+
+  openAppModal('Import Apple Health', `
+    <div class="health-import-modal">
+      <div class="progress-helper-text">Upload a Health Auto Export JSON snapshot. Workouts are imported from all dates in the file, but day-level energy for the latest metric date is skipped because it may still be incomplete.</div>
+      <input id="health-import-file" class="health-import-file hidden" type="file" accept=".json,application/json">
+      <div class="health-import-picker-row">
+        <button id="health-import-choose-btn" class="btn btn-outline" ${healthImportState.busy ? 'disabled' : ''}>Choose File</button>
+        <div id="health-import-file-name" class="health-import-file-name">${healthImportState.filename || 'No file selected yet'}</div>
+      </div>
+      ${errorHtml}
+      <div class="health-import-actions">
+        <button id="health-import-confirm-btn" class="btn" ${healthImportState.busy || !preview || preview.new_data_day_count === 0 ? 'disabled' : ''}>Import Snapshot</button>
+      </div>
+      ${previewHtml}
+    </div>
+  `);
+
+  wireHealthImportModal();
+}
+
+function wireHealthImportModal() {
+  const fileInput = document.getElementById('health-import-file');
+  const chooseBtn = document.getElementById('health-import-choose-btn');
+  const confirmBtn = document.getElementById('health-import-confirm-btn');
+  if (!fileInput || !chooseBtn || !confirmBtn) return;
+
+  chooseBtn.addEventListener('click', () => {
+    if (healthImportState.busy) return;
+    fileInput.click();
+  });
+
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files?.[0];
+    healthImportState.preview = null;
+    healthImportState.error = '';
+    healthImportState.mode = 'preview';
+    if (!file) {
+      healthImportState.filename = '';
+      healthImportState.fileContent = '';
+      renderHealthImportModal();
+      return;
+    }
+    healthImportState.filename = file.name;
+    try {
+      healthImportState.fileContent = await file.text();
+    } catch (error) {
+      healthImportState.fileContent = '';
+      healthImportState.error = 'Could not read that file. Please try exporting it again.';
+      renderHealthImportModal();
+      return;
+    }
+    renderHealthImportModal();
+    await runHealthImportUpload(true);
+  });
+
+  confirmBtn.addEventListener('click', async () => {
+    await runHealthImportUpload(false);
+  });
+}
+
+async function runHealthImportUpload(dryRun) {
+  if (!healthImportState.fileContent || healthImportState.busy) return;
+  healthImportState.busy = true;
+  healthImportState.error = '';
+  renderHealthImportModal();
+  try {
+    const summary = await api('/api/import/health/upload', {
+      method: 'POST',
+      body: {
+        filename: healthImportState.filename,
+        file_content: healthImportState.fileContent,
+        dry_run: dryRun,
+        level: 'full',
+      },
+    });
+    healthImportState.preview = summary;
+    healthImportState.mode = dryRun ? 'preview' : 'imported';
+    renderHealthImportModal();
+    if (dryRun) {
+      showToast('Preview ready');
+      return;
+    }
+    showToast('Apple Health import complete');
+    state.workoutDatesCache = null;
+    healthImportState.preview = summary;
+    renderHealthImportModal();
+  } catch (error) {
+    healthImportState.preview = null;
+    healthImportState.error = error.message || 'Import failed';
+    renderHealthImportModal();
+    throw error;
+  } finally {
+    healthImportState.busy = false;
+    renderHealthImportModal();
+  }
+}
+
+function openHealthImportModal() {
+  healthImportState.filename = '';
+  healthImportState.fileContent = '';
+  healthImportState.preview = null;
+  healthImportState.busy = false;
+  healthImportState.error = '';
+  healthImportState.mode = 'preview';
+  renderHealthImportModal();
 }
 
 async function loadProgressSection() {
