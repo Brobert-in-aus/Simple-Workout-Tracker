@@ -135,25 +135,25 @@ function mealCardHTML(template, log, isCustom) {
   const lid     = log?.id ?? '';
   const sortOrd = template?.sort_order ?? (log?.sort_order ?? 0);
 
-  let summaryContent, inputCal, inputProt, inputCarb, inputFat, confirmBtn;
+  let summaryContent, inputCal, inputProt, confirmBtn;
 
   if (logged) {
-    const { calories_kcal: cal, protein_g: prot, carbs_g: carb, fat_g: fat } = log;
-    summaryContent = summaryHTML(cal, prot, carb, fat, true);
-    inputCal = cal; inputProt = prot; inputCarb = carb; inputFat = fat;
+    const { calories_kcal: cal, protein_g: prot } = log;
+    summaryContent = summaryHTML(cal, prot, true);
+    inputCal = cal; inputProt = prot;
     confirmBtn = useDefaults
       ? '<button class="meal-confirm-btn confirmed" title="Logged">&#10003;</button>'
       : '';
   } else if (useDefaults) {
     // Quick-confirm slot, unlogged: show dimmed defaults + confirm button
     const d = getSlotDefaults(template);
-    summaryContent = summaryHTML(d.calories_kcal, d.protein_g, d.carbs_g, d.fat_g, false);
-    inputCal = d.calories_kcal; inputProt = d.protein_g; inputCarb = d.carbs_g; inputFat = d.fat_g;
+    summaryContent = summaryHTML(d.calories_kcal, d.protein_g, false);
+    inputCal = d.calories_kcal; inputProt = d.protein_g;
     confirmBtn = '<button class="meal-confirm-btn" title="Log with defaults">&#10003;</button>';
   } else {
     // Manual entry slot, unlogged: blank
     summaryContent = '<span class="summary-blank">&mdash;</span>';
-    inputCal = 0; inputProt = 0; inputCarb = 0; inputFat = 0;
+    inputCal = 0; inputProt = 0;
     confirmBtn = '';
   }
 
@@ -174,8 +174,6 @@ function mealCardHTML(template, log, isCustom) {
         <div class="meal-macro-inputs">
           ${macroInputHTML('calories_kcal', 'Cal', inputCal)}
           ${macroInputHTML('protein_g',     'P g', inputProt)}
-          ${macroInputHTML('carbs_g',       'C g', inputCarb)}
-          ${macroInputHTML('fat_g',         'F g', inputFat)}
         </div>
       </div>
     </div>`;
@@ -190,8 +188,8 @@ function macroInputHTML(field, label, value) {
     </div>`;
 }
 
-function summaryHTML(cal, prot, carb, fat, logged) {
-  const s = `${Math.round(cal)} kcal · ${Math.round(prot)}P ${Math.round(carb)}C ${Math.round(fat)}F`;
+function summaryHTML(cal, prot, logged) {
+  const s = `${Math.round(cal)} kcal · ${Math.round(prot)}P`;
   return logged ? s : `<span class="summary-dim">${s}</span>`;
 }
 
@@ -209,10 +207,8 @@ function calcTotals(logs) {
     (acc, l) => ({
       cal:  acc.cal  + (l.calories_kcal || 0),
       prot: acc.prot + (l.protein_g     || 0),
-      carb: acc.carb + (l.carbs_g       || 0),
-      fat:  acc.fat  + (l.fat_g         || 0),
     }),
-    { cal: 0, prot: 0, carb: 0, fat: 0 }
+    { cal: 0, prot: 0 }
   );
 }
 
@@ -340,8 +336,8 @@ function getCardValues(card) {
 }
 
 function updateCardDisplay(card, values) {
-  const { calories_kcal: cal = 0, protein_g: p = 0, carbs_g: c = 0, fat_g: f = 0 } = values;
-  card.querySelector('.meal-summary').innerHTML = summaryHTML(cal, p, c, f, true);
+  const { calories_kcal: cal = 0, protein_g: p = 0 } = values;
+  card.querySelector('.meal-summary').innerHTML = summaryHTML(cal, p, true);
   card.classList.remove('unlogged');
   card.classList.add('logged');
   // Transition confirm button to confirmed state if it's a quick-confirm slot
@@ -358,8 +354,6 @@ function updateTotalsDisplay() {
     allLogs.push({
       calories_kcal: parseFloat(card.querySelector('[data-field="calories_kcal"]')?.value) || 0,
       protein_g:     parseFloat(card.querySelector('[data-field="protein_g"]')?.value)     || 0,
-      carbs_g:       parseFloat(card.querySelector('[data-field="carbs_g"]')?.value)       || 0,
-      fat_g:         parseFloat(card.querySelector('[data-field="fat_g"]')?.value)         || 0,
     });
   });
   const totals = calcTotals(allLogs);
@@ -484,14 +478,12 @@ async function handleDelete(card, tid, isCustom) {
     if (useDefaults) {
       // Reset to dimmed defaults + restore unconfirmed ✓ button
       card.querySelector('.meal-summary').innerHTML = summaryHTML(
-        template.calories_kcal, template.protein_g, template.carbs_g, template.fat_g, false
+        template.calories_kcal, template.protein_g, false
       );
       card.querySelectorAll('.macro-input').forEach(inp => {
         const f = inp.dataset.field;
         inp.value = Math.round(
-          f === 'calories_kcal' ? template.calories_kcal :
-          f === 'protein_g'     ? template.protein_g :
-          f === 'carbs_g'       ? template.carbs_g : template.fat_g
+          f === 'calories_kcal' ? template.calories_kcal : template.protein_g
         );
       });
       const confirmBtn = card.querySelector('.meal-confirm-btn');
@@ -601,8 +593,6 @@ function templateRowHTML(t) {
       <div class="template-row-macros">
         ${tmplMacroHTML('calories_kcal', 'Cal', t.calories_kcal)}
         ${tmplMacroHTML('protein_g',     'P g', t.protein_g)}
-        ${tmplMacroHTML('carbs_g',       'C g', t.carbs_g)}
-        ${tmplMacroHTML('fat_g',         'F g', t.fat_g)}
       </div>
     </div>`;
 }
