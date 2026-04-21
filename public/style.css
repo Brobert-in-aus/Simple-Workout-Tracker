@@ -448,9 +448,9 @@ html, body {
 }
 
 .amrap-toggle.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: white;
+  background: var(--beige);
+  border-color: var(--beige);
+  color: var(--text);
 }
 
 /* --- AMRAP Marker in History --- */
@@ -2504,7 +2504,7 @@ html, body {
 
 .calorie-progress-wrap {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 0%;
+  grid-template-columns: 85% 15%;
   gap: 0;
   align-items: center;
   margin-top: 18px;
@@ -2551,21 +2551,42 @@ html, body {
   z-index: 1;
 }
 
-.calorie-progress-fill {
-  position: relative;
+.calorie-progress-segment {
+  position: absolute;
+  top: 0;
   z-index: 2;
+  height: 100%;
+}
+
+.calorie-progress-segment-pending {
+  background: #8a94ad;
+}
+
+.calorie-progress-segment-hit {
+  background: var(--success);
+}
+
+.calorie-progress-segment-over {
+  background: var(--olive);
+}
+
+.calorie-progress-overflow-slot {
+  height: 6px;
+  position: relative;
+}
+
+.calorie-progress-overflow-slot:empty {
+  display: block;
 }
 
 .calorie-progress-overflow-fill {
   height: 6px;
   align-self: stretch;
-  overflow: hidden;
-  width: 0;
   background: var(--text-warn);
   border-top-right-radius: 3px;
   border-bottom-right-radius: 3px;
   transition: width 0.3s ease, background 0.3s ease;
-  margin-left: -1px;
+  margin-left: 2px;
 }
 
 /* Meal cards */
@@ -2778,6 +2799,10 @@ html, body {
 .totals-value {
   font-weight: 600;
   color: var(--text);
+}
+
+.totals-value-forecast {
+  font-style: italic;
 }
 
 .totals-value.target-hit {
