@@ -179,18 +179,19 @@ function renderDayContent(el) {
 
   const visible = (templates || []).filter(t => isWorkout || t.include_rest_day);
   const totals = calcTotals(logs);
+  const dayComplete = areAllVisibleTemplateMealsLogged(visible, logs);
 
   el.innerHTML = `
     <div class="nutrition-day-badge ${isWorkout ? 'training' : 'rest'}">
       ${isWorkout ? 'Training Day' : 'Rest Day'}
     </div>
-    ${targetsBarHTML(tgt, totals)}
+    ${targetsBarHTML(tgt, totals, dayComplete)}
     <div id="nutrition-meals">
       ${visible.map(t => mealCardHTML(t, logByTemplate[t.id] ?? null, false)).join('')}
       ${customLogs.map(log => mealCardHTML(null, log, true)).join('')}
     </div>
     <button class="btn-add-meal" id="nutr-add-custom">+ Add Custom Meal</button>
-    ${totalsHTML(totals, tgt, logData)}
+    ${totalsHTML(totals, tgt, logData, dayComplete)}
     <button class="btn-link nutr-settings-btn" id="nutr-settings">&#9881; Meal Settings</button>
   `;
 
@@ -444,6 +445,22 @@ function summaryHTML(cal, prot, logged) {
   return logged ? s : `<span class="summary-dim">${s}</span>`;
 }
 
+function areAllVisibleTemplateMealsLogged(visibleTemplates, logs) {
+  if (!Array.isArray(visibleTemplates) || visibleTemplates.length === 0) return false;
+  const loggedTemplateIds = new Set(
+    (logs || [])
+      .filter(log => log.meal_template_id != null)
+      .map(log => log.meal_template_id)
+  );
+  return visibleTemplates.every(template => loggedTemplateIds.has(template.id));
+}
+
+function areAllTemplateMealCardsLogged() {
+  const templateCards = [...document.querySelectorAll('#nutrition-meals .meal-card[data-is-custom="0"]')];
+  if (templateCards.length === 0) return false;
+  return templateCards.every(card => card.classList.contains('logged'));
+}
+
 // Returns a CSS class reflecting whether val is within ±range of target.
 // Returns '' when there's no meaningful data to compare.
 function targetClass(val, target, range) {
@@ -451,6 +468,13 @@ function targetClass(val, target, range) {
   const diff = val - target;
   if (Math.abs(diff) <= range) return 'target-hit';
   return diff < 0 ? 'target-low' : 'target-high';
+}
+
+function getTargetClassForProgress(val, target, range, isComplete) {
+  if (!target || typeof val !== 'number') return '';
+  if (isComplete) return targetClass(val, target, range);
+  if (val < target - range) return '';
+  return targetClass(val, target, range);
 }
 
 function calcTotals(logs) {
@@ -528,24 +552,135 @@ function getEnergyBalanceDisplay(actualBalance, targetBalance, range) {
   };
 }
 
-function targetsBarHTML(tgt, totals) {
-  const hasTargets = tgt && (tgt.calories || tgt.protein_g);
+function getEnergyBalanceDisplayForProgress(actualBalance, targetBalance, range, isComplete) {
+  const display = getEnergyBalanceDisplay(actualBalance, targetBalance, range);
+  if (isComplete) return display;
+  if (typeof targetBalance !== 'number' || typeof actualBalance !== 'number') {
+    return { ...display, className: '' };
+  }
+  const targetMagnitude = Math.abs(targetBalance);
+  const actualDirection = getEnergyDirection(actualBalance);
+  const targetDirection = getEnergyDirection(targetBalance);
+  const actualMagnitude = actualDirection === targetDirection ? Math.abs(actualBalance) : 0;
+  if (actualMagnitude < Math.max(0, targetMagnitude - range)) {
+    return { ...display, className: '' };
+  }
+  return {
+    ...display,
+    className: getEnergyBalanceDisplay(actualBalance, targetBalance, range).className,
+  };
+}
+
+function getCalorieTargetModel(totals, tgt, logData, isComplete) {
+  const tdeeKcal = logData?.tdee_kcal ?? null;
+  const energyTarget = typeof tgt?.energy_target === 'number' ? tgt.energy_target : null;
+  const fallbackTarget = typeof tgt?.calories === 'number' && tgt.calories > 0 ? tgt.calories : null;
+  const actualCalories = Math.round(totals.cal);
+
+  if (tdeeKcal != null && energyTarget != null) {
+    const roundedTdee = Math.round(tdeeKcal);
+    const targetCalories = Math.max(0, Math.round(tdeeKcal + energyTarget));
+    const mainTrackMax = energyTarget > 0 ? targetCalories : roundedTdee;
+    const deficitReserve = energyTarget < 0 ? Math.min(mainTrackMax, Math.abs(Math.round(energyTarget))) : 0;
+    const fillPct = mainTrackMax > 0 ? Math.min(100, (actualCalories / mainTrackMax) * 100) : 0;
+    const deficitPct = mainTrackMax > 0 ? (deficitReserve / mainTrackMax) * 100 : 0;
+    const overflowCap = Math.max(1, Math.round(mainTrackMax * 0.25));
+    const overflowKcal = Math.max(0, actualCalories - mainTrackMax);
+    const overflowPct = Math.min(100, (overflowKcal / overflowCap) * 100);
+
+    return {
+      targetCalories,
+      displayTarget: targetCalories,
+      barMax: mainTrackMax,
+      fillPct,
+      deficitPct,
+      overflowPct,
+      overflowKcal,
+      tdeeKcal: roundedTdee,
+      energyTarget,
+      source: 'derived',
+      className: getTargetClassForProgress(actualCalories, targetCalories, CAL_RANGE, isComplete),
+      label: 'Calories',
+      targetLabel: energyTarget < 0 ? `Target ${targetCalories} kcal (TDEE minus ${Math.abs(Math.round(energyTarget))})`
+        : energyTarget > 0 ? `Target ${targetCalories} kcal (TDEE plus ${Math.round(energyTarget)})`
+        : `Target ${targetCalories} kcal`,
+    };
+  }
+
+  const fillPct = fallbackTarget && fallbackTarget > 0 ? Math.min(100, (actualCalories / fallbackTarget) * 100) : 0;
+  return {
+    targetCalories: fallbackTarget,
+    displayTarget: fallbackTarget,
+    barMax: fallbackTarget,
+    fillPct,
+    deficitPct: 0,
+    overflowPct: 0,
+    overflowKcal: 0,
+    tdeeKcal: tdeeKcal != null ? Math.round(tdeeKcal) : null,
+    energyTarget,
+    source: fallbackTarget ? 'fallback' : 'none',
+    className: fallbackTarget ? getTargetClassForProgress(actualCalories, fallbackTarget, CAL_RANGE, isComplete) : '',
+    label: 'Calories',
+    targetLabel: fallbackTarget ? `Target ${fallbackTarget} kcal` : '',
+  };
+}
+
+function calorieBarHTML(model, totals) {
+  const targetText = model.displayTarget ? `${Math.round(totals.cal)} / ${model.displayTarget} kcal` : `${Math.round(totals.cal)} kcal`;
+  const overflowWidthPct = model.overflowPct > 0
+    ? Math.max(6, Math.min(15, model.overflowPct * 0.15))
+    : 0;
+  const labelPosPct = model.overflowPct > 0
+    ? Math.min(99, model.fillPct + ((overflowWidthPct * model.overflowPct) / 100))
+    : Math.min(99, Math.max(0, model.fillPct));
+  const labelAlignClass = labelPosPct < 18 ? 'calorie-progress-value-start' : 'calorie-progress-value-end';
+  const deficitStatus = model.source === 'derived' && model.energyTarget < 0
+    ? `Deficit: ${Math.max(0, model.tdeeKcal - Math.round(totals.cal))} / ${Math.abs(Math.round(model.energyTarget))} kcal`
+    : '';
+  const helper = model.source === 'derived'
+    ? model.energyTarget < 0
+      ? `${model.tdeeKcal} kcal TDEE with ${Math.abs(Math.round(model.energyTarget))} kcal held back for deficit.`
+      : model.energyTarget > 0
+        ? `${model.tdeeKcal} kcal TDEE with ${Math.round(model.energyTarget)} kcal surplus allowance.`
+        : `${model.tdeeKcal} kcal TDEE target.`
+    : model.source === 'fallback'
+      ? model.targetLabel
+      : '';
+
+  return `
+    <div class="target-bar-row">
+      <span class="target-bar-label">Calories</span>
+    </div>
+    <div class="calorie-progress-wrap${model.overflowPct > 0 ? ' has-overflow' : ''}" style="grid-template-columns:minmax(0, 1fr) ${overflowWidthPct}%;">
+      <div class="target-bar-value calorie-progress-value ${labelAlignClass} ${model.className}" style="left:${labelPosPct}%;">${targetText}</div>
+      <div class="calorie-progress-main ${model.overflowPct > 0 ? 'with-overflow' : ''}">
+        <div class="targets-progress-bar calorie-progress-bar">
+          ${model.deficitPct > 0 ? `<div class="calorie-progress-deficit" style="width:${model.deficitPct}%"></div>` : ''}
+          <div class="targets-progress-fill calorie-progress-fill ${model.className}" style="width:${model.fillPct}%"></div>
+        </div>
+      </div>
+      ${model.overflowPct > 0 ? `<div class="calorie-progress-overflow-fill target-high" style="width:${model.overflowPct}%"></div>` : ''}
+    </div>
+    ${(deficitStatus || helper) ? `
+      <div class="target-bar-helper-row">
+        ${helper ? `<div class="target-bar-helper">${helper}</div>` : '<div></div>'}
+        ${deficitStatus ? `<div class="target-bar-helper target-bar-helper-deficit">${deficitStatus}</div>` : ''}
+      </div>
+    ` : ''}
+  `;
+}
+
+function targetsBarHTML(tgt, totals, isComplete = true) {
+  const hasTargets = tgt && (tgt.calories || tgt.protein_g || tgt.energy_target != null);
   if (!hasTargets) {
     return '<p class="nutrition-no-targets">Set macro targets in &#9881; Meal Settings</p>';
   }
-  const calPct  = tgt.calories  > 0 ? Math.min(100, Math.round((totals.cal  / tgt.calories)  * 100)) : 0;
+  const calorieModel = getCalorieTargetModel(totals, tgt, logData, isComplete);
   const protPct = tgt.protein_g > 0 ? Math.min(100, Math.round((totals.prot / tgt.protein_g) * 100)) : 0;
-  const calClass  = targetClass(totals.cal,  tgt.calories,  CAL_RANGE);
-  const protClass = targetClass(totals.prot, tgt.protein_g, PROT_RANGE);
+  const protClass = getTargetClassForProgress(totals.prot, tgt.protein_g, PROT_RANGE, isComplete);
   return `
     <div class="nutrition-targets-bar">
-      <div class="target-bar-row">
-        <span class="target-bar-label">Calories</span>
-        <span class="target-bar-value ${calClass}">${Math.round(totals.cal)} / ${tgt.calories} kcal</span>
-      </div>
-      <div class="targets-progress-bar">
-        <div class="targets-progress-fill ${calClass}" style="width:${calPct}%"></div>
-      </div>
+      ${calorieBarHTML(calorieModel, totals)}
       <div class="target-bar-row">
         <span class="target-bar-label">Protein</span>
         <span class="target-bar-value ${protClass}">${Math.round(totals.prot)} / ${tgt.protein_g} g</span>
@@ -556,15 +691,16 @@ function targetsBarHTML(tgt, totals) {
     </div>`;
 }
 
-function totalsHTML(totals, tgt, logData) {
+function totalsHTML(totals, tgt, logData, isComplete = true) {
   const tdeeKcal = logData?.tdee_kcal ?? null;
   const healthMetrics = logData?.health_metrics ?? null;
-  const hasTargets = tgt && (tgt.calories || tgt.protein_g);
-  const calClass  = hasTargets ? targetClass(totals.cal,  tgt.calories,  CAL_RANGE)  : '';
-  const protClass = hasTargets ? targetClass(totals.prot, tgt.protein_g, PROT_RANGE) : '';
+  const hasTargets = tgt && (tgt.calories || tgt.protein_g || tgt.energy_target != null);
+  const calorieModel = getCalorieTargetModel(totals, tgt, logData, isComplete);
+  const calClass  = hasTargets ? calorieModel.className : '';
+  const protClass = hasTargets ? getTargetClassForProgress(totals.prot, tgt.protein_g, PROT_RANGE, isComplete) : '';
 
   const rows = [
-    { label: 'Calories', val: Math.round(totals.cal),  tgtVal: tgt?.calories,  unit: 'kcal', cls: calClass },
+    { label: 'Calories', val: Math.round(totals.cal),  tgtVal: calorieModel.displayTarget,  unit: 'kcal', cls: calClass },
     { label: 'Protein',  val: Math.round(totals.prot), tgtVal: tgt?.protein_g, unit: 'g',    cls: protClass },
   ];
 
@@ -572,7 +708,7 @@ function totalsHTML(totals, tgt, logData) {
   if (tdeeKcal != null) {
     const actualBalance = Math.round(totals.cal) - tdeeKcal;
     const defTgt = tgt?.energy_target ?? null;
-    const energyDisplay = getEnergyBalanceDisplay(actualBalance, defTgt, CAL_RANGE);
+    const energyDisplay = getEnergyBalanceDisplayForProgress(actualBalance, defTgt, CAL_RANGE, isComplete);
     const tgtStr = energyDisplay.targetDisplay != null ? ` / ${energyDisplay.targetDisplay}` : '';
     const noteHtml = energyDisplay.note ? `<span class="totals-note-inline">${energyDisplay.note}</span>` : '';
     deficitRow = `
@@ -611,7 +747,7 @@ function totalsHTML(totals, tgt, logData) {
       ${rows.map(r => `
         <div class="totals-row">
           <span class="totals-label">${r.label}</span>
-          <span class="totals-value ${r.cls}">${r.val}${hasTargets ? ` / ${r.tgtVal}` : ''} ${r.unit}</span>
+          <span class="totals-value ${r.cls}">${r.val}${r.tgtVal != null ? ` / ${r.tgtVal}` : ''} ${r.unit}</span>
         </div>`).join('')}
       ${healthRows}
       ${deficitRow}
@@ -702,12 +838,13 @@ function updateTotalsDisplay() {
   const totals = calcTotals(allLogs);
   const isWorkout = logData?.is_workout_day;
   const tgt = isWorkout ? targets.workout : targets.rest;
+  const dayComplete = areAllTemplateMealCardsLogged();
 
   const tBar = document.querySelector('.nutrition-targets-bar, .nutrition-no-targets');
-  if (tBar) tBar.outerHTML = targetsBarHTML(tgt, totals);
+  if (tBar) tBar.outerHTML = targetsBarHTML(tgt, totals, dayComplete);
 
   const tot = document.querySelector('.nutrition-totals');
-  if (tot) tot.outerHTML = totalsHTML(totals, tgt, logData);
+  if (tot) tot.outerHTML = totalsHTML(totals, tgt, logData, dayComplete);
 }
 
 // --- Quick confirm (Option B) ---

@@ -2473,8 +2473,100 @@ html, body {
 .target-high { color: var(--text-warn); }
 
 .targets-progress-fill.target-hit  { background: var(--success); }
+.targets-progress-fill.target-low  { background: var(--olive); }
 .targets-progress-fill.target-high { background: var(--text-warn); }
-/* target-low on fill: keep accent colour — under target is expected mid-day */
+
+.target-bar-helper-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 2px;
+  margin-bottom: 14px;
+}
+
+.target-bar-helper {
+  margin-top: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.target-bar-helper-deficit {
+  color: #8a94ad;
+  margin-bottom: 0;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.target-bar-helper-row .target-bar-helper {
+  margin-bottom: 0;
+}
+
+.calorie-progress-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 0%;
+  gap: 0;
+  align-items: center;
+  margin-top: 18px;
+  margin-bottom: 10px;
+  position: relative;
+}
+
+.calorie-progress-main {
+  min-width: 0;
+}
+
+.calorie-progress-value {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  transform: translateX(-100%);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.calorie-progress-value-start {
+  transform: translateX(0);
+}
+
+.calorie-progress-value-end {
+  transform: translateX(-100%);
+}
+
+.calorie-progress-main.with-overflow .calorie-progress-bar {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.calorie-progress-bar {
+  position: relative;
+}
+
+.calorie-progress-deficit {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  background: #8a94ad;
+  opacity: 0.5;
+  z-index: 1;
+}
+
+.calorie-progress-fill {
+  position: relative;
+  z-index: 2;
+}
+
+.calorie-progress-overflow-fill {
+  height: 6px;
+  align-self: stretch;
+  overflow: hidden;
+  width: 0;
+  background: var(--text-warn);
+  border-top-right-radius: 3px;
+  border-bottom-right-radius: 3px;
+  transition: width 0.3s ease, background 0.3s ease;
+  margin-left: -1px;
+}
 
 /* Meal cards */
 
