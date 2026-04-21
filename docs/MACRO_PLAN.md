@@ -1,9 +1,5 @@
 # Macro Tracking Plan
 
-## Open Bug
-
-- Re-importing the exact same Apple Health snapshot can still preview as if it contains new data. The import preview should treat an identical already-imported snapshot as `No new data` unless the snapshot is actually newer or contains corrected values that will overwrite existing rows.
-
 ## Purpose
 
 Design and implementation notes for the Nutrition tab: macro tracking, meal templating, and Apple Health-backed TDEE context.
@@ -15,7 +11,8 @@ Design and implementation notes for the Nutrition tab: macro tracking, meal temp
 ### What was built
 
 - **Nutrition tab** (4th nav tab) with sticky date navigation
-- **Day type detection** - `Training Day` / `Rest Day` based on whether a tracked workout exists for that date in `workouts`
+- **Nutrition Summary view** with `1m / 3m / 6m / all` range controls, topline stats, trend charts, and recent active-day rows
+- **Day type detection** - past dates use recorded workouts; current and future dates use the weekly schedule so planned training days do not show as rest days before a workout is started
 - **Meal template slots** - ordered list of named slots managed via the Meal Settings modal
 - **Per-slot rest-day toggle** - `include_rest_day` flag hides slots on rest days
 - **Per-slot quick-confirm toggle** (`use_defaults`) - see Option B below
@@ -78,8 +75,8 @@ CREATE TABLE user_settings (
   value TEXT NOT NULL
 );
 -- Keys used:
---   macro_targets_workout  JSON: { calories, protein_g, carbs_g, fat_g, deficit_target }
---   macro_targets_rest     JSON: { calories, protein_g, carbs_g, fat_g, deficit_target }
+--   macro_targets_workout  JSON: { calories, protein_g, carbs_g, fat_g, energy_target }
+--   macro_targets_rest     JSON: { calories, protein_g, carbs_g, fat_g, energy_target }
 ```
 
 ### API
@@ -92,6 +89,7 @@ CREATE TABLE user_settings (
 | PUT | `/api/nutrition/templates/:id` | Update fields |
 | DELETE | `/api/nutrition/templates/:id` | Soft-delete (active = 0) |
 | GET | `/api/nutrition/logs/:date` | Day's logs + `is_workout_day` + `tdee_kcal` + `health_metrics` |
+| GET | `/api/nutrition/summary?range=1m|3m|6m|all` | Range summary with daily points, averages, target-hit counts, and Apple/fallback source flags |
 | POST | `/api/nutrition/logs` | Create log entry (upserts on `meal_template_id + date`) |
 | PUT | `/api/nutrition/logs/:id` | Update log entry |
 | DELETE | `/api/nutrition/logs/:id` | Delete log entry |
@@ -166,15 +164,28 @@ Apple Health TDEE context is now live in the app.
 - the per-profile energy target field now supports signed targets:
   - negative value = deficit target
   - positive value = surplus target
+- the stored settings key is now `energy_target`, with backward-compatible reading of older saved `deficit_target` values
 - the settings UI now labels that field dynamically as `Deficit`, `Surplus`, or `Deficit/Surplus`
 - the totals card clamps progress to `0` when the user is on the wrong side of maintenance and shows the opposite-side note inline, for example `Deficit 0 / 600 kcal (300 kcal surplus)`
 - energy target status colors now use the app palette and the existing hardcoded calorie tolerance:
   - green when within +/-100 kcal of target on the correct side
   - olive when on the correct side but outside tolerance
   - dark red when on the wrong side entirely
+- when Apple data is missing for a date, Nutrition now falls back to recent Apple history:
+  - last 14 same day-type rows first
+  - if fewer than 3 same day-type rows exist, last 14 Apple days overall
+- the totals UI now indicates when TDEE is estimated from fallback history instead of a direct same-day Apple import
+- Nutrition now has a Summary mode that:
+  - requests range-based summary data from `/api/nutrition/summary`
+  - shows average intake, protein, energy balance, and Apple Health coverage
+  - charts energy balance, calories logged, and active energy over time
+  - shows recent active days with workout/rest classification plus direct vs estimated Apple context
+  - counts calorie/protein/energy target-hit days across the selected range
 
 ### What's still needed
 
-- **Fallback when Apple data is missing** - average of the last 14 days of the same day-type (workout days with workout days, rest days with rest days); fall back to all-days average if fewer than 3 same-type records exist
-- **Target naming review** - decide whether the stored key `deficit_target` should eventually be renamed to something more neutral like `energy_target`
-- **Trend/summary views** - if desired later, add nutrition summaries that use `health_daily_metrics` across date ranges rather than only per-day context
+- No remaining must-build items on the original macro plan.
+- Future polish, if wanted later:
+  - richer chart comparisons such as intake vs TDEE on the same plot
+  - export/share for nutrition summaries
+  - weekly/monthly rollups if the daily summary view starts feeling too granular for long ranges

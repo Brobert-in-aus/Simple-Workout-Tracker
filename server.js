@@ -32,6 +32,34 @@ function todayISO() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function shiftIsoDate(date, { months = 0, years = 0, days = 0 } = {}) {
+  const shifted = new Date(`${date}T00:00:00`);
+  if (months) shifted.setMonth(shifted.getMonth() + months);
+  if (years) shifted.setFullYear(shifted.getFullYear() + years);
+  if (days) shifted.setDate(shifted.getDate() + days);
+  return `${shifted.getFullYear()}-${String(shifted.getMonth() + 1).padStart(2, '0')}-${String(shifted.getDate()).padStart(2, '0')}`;
+}
+
+function getEarliestNutritionSummaryDate() {
+  const sqlite = db.getDb();
+  const macroMin = sqlite.prepare('SELECT MIN(date) AS min_date FROM macro_logs').get()?.min_date ?? null;
+  const healthMin = sqlite.prepare('SELECT MIN(date) AS min_date FROM health_daily_metrics').get()?.min_date ?? null;
+  return [macroMin, healthMin].filter(Boolean).sort()[0] || null;
+}
+
+function getNutritionSummaryBounds(range = '1m') {
+  const end = todayISO();
+  const earliest = getEarliestNutritionSummaryDate();
+  if (range === 'all') {
+    return { start: earliest || end, end };
+  }
+
+  if (range === '3m') return { start: shiftIsoDate(end, { months: -3 }), end };
+  if (range === '6m') return { start: shiftIsoDate(end, { months: -6 }), end };
+  if (range === '1y') return { start: shiftIsoDate(end, { years: -1 }), end };
+  return { start: shiftIsoDate(end, { months: -1 }), end };
+}
+
 function getBackupStatus() {
   const fs = require('fs');
   const backupDir = path.join(__dirname, 'data', 'backups');
@@ -742,6 +770,16 @@ app.get('/api/nutrition/logs/:date', (req, res) => {
   res.json({ logs, is_workout_day, tdee_kcal, health_metrics });
 });
 
+app.get('/api/nutrition/summary', (req, res) => {
+  const range = String(req.query.range || '1m');
+  const { start, end } = getNutritionSummaryBounds(range);
+  const summary = db.getNutritionSummaryForRange(start, end);
+  res.json({
+    range,
+    ...summary,
+  });
+});
+
 app.post('/api/nutrition/logs', (req, res) => {
   const { date, meal_template_id, meal_name, sort_order, calories_kcal, protein_g, carbs_g, fat_g } = req.body;
   if (!date || !meal_name) return res.status(400).json({ error: 'date and meal_name required' });
@@ -786,21 +824,30 @@ app.delete('/api/nutrition/logs/:id', (req, res) => {
 
 // --- Nutrition: Macro Targets API ---
 
+function normalizeMacroTargetProfile(profile = {}) {
+  const normalized = { ...profile };
+  if (normalized.energy_target == null && normalized.deficit_target != null) {
+    normalized.energy_target = normalized.deficit_target;
+  }
+  delete normalized.deficit_target;
+  return normalized;
+}
+
 app.get('/api/nutrition/targets', (req, res) => {
   const w = db.getUserSetting('macro_targets_workout');
   const r = db.getUserSetting('macro_targets_rest');
   const empty = { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 };
   res.json({
-    workout: w ? JSON.parse(w) : empty,
-    rest: r ? JSON.parse(r) : empty,
+    workout: normalizeMacroTargetProfile(w ? JSON.parse(w) : empty),
+    rest: normalizeMacroTargetProfile(r ? JSON.parse(r) : empty),
     apple_health_adjustments: db.getAppleHealthEnergyAdjustments(),
   });
 });
 
 app.put('/api/nutrition/targets', (req, res) => {
   const { workout, rest, apple_health_adjustments } = req.body;
-  if (workout) db.setUserSetting('macro_targets_workout', JSON.stringify(workout));
-  if (rest) db.setUserSetting('macro_targets_rest', JSON.stringify(rest));
+  if (workout) db.setUserSetting('macro_targets_workout', JSON.stringify(normalizeMacroTargetProfile(workout)));
+  if (rest) db.setUserSetting('macro_targets_rest', JSON.stringify(normalizeMacroTargetProfile(rest)));
   if (apple_health_adjustments) db.setAppleHealthEnergyAdjustments(apple_health_adjustments);
   res.json({ ok: true });
 });

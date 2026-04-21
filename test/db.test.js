@@ -49,6 +49,21 @@ function buildTemplate(templateName, exerciseSpecs) {
   return { templateId, deIds };
 }
 
+function resetHealthImportAndScheduleState() {
+  const sqlite = db.getDb();
+  sqlite.prepare('DELETE FROM external_workout_links').run();
+  sqlite.prepare('DELETE FROM external_workout_raw').run();
+  sqlite.prepare('DELETE FROM external_workout_metrics').run();
+  sqlite.prepare('DELETE FROM external_workouts').run();
+  sqlite.prepare('DELETE FROM health_daily_metrics').run();
+  sqlite.prepare('DELETE FROM workout_sets').run();
+  sqlite.prepare('DELETE FROM workout_exercises').run();
+  sqlite.prepare('DELETE FROM workouts').run();
+  sqlite.prepare('DELETE FROM day_exercises').run();
+  sqlite.prepare('DELETE FROM schedule').run();
+  sqlite.prepare('DELETE FROM days').run();
+}
+
 // --- Workout creation ------------------------------------------------------
 
 test('initWorkoutFromTemplate creates workout, exercises, and sets from template', () => {
@@ -362,6 +377,160 @@ test('macro TDEE context applies Apple Health functional strength correction fac
   db.setAppleHealthEnergyAdjustments({ functional_strength_training_factor: 1 });
 });
 
+test('macro TDEE context falls back to recent same day-type Apple history when current date is missing', () => {
+  resetHealthImportAndScheduleState();
+  const tuesdayTemplateId = db.createTemplate('Tuesday Program');
+  db.addScheduleEntry(1, tuesdayTemplateId);
+
+  for (const [date, active, resting] of [
+    ['2026-04-07', 600, 1900],
+    ['2026-04-14', 700, 2000],
+    ['2026-04-21', 800, 2100],
+  ]) {
+    db.initWorkoutFromTemplate(date, tuesdayTemplateId);
+    db.upsertHealthDailyMetrics({
+      date,
+      sourceType: 'apple_health',
+      activeEnergyKj: active * 4.184,
+      restingEnergyKj: resting * 4.184,
+      activeEnergyKcal: active,
+      restingEnergyKcal: resting,
+      tdeeKcal: active + resting,
+      sampleCountActive: 1,
+      sampleCountResting: 1,
+      sourceFile: 'fallback-same-type.json',
+      sourceSnapshotDate: '2026-04-22',
+    });
+  }
+
+  const context = db.getMacroTdeeContextForDate('2026-04-28');
+  assert.equal(context.source, 'fallback_same_day_type');
+  assert.equal(context.fallback_sample_count, 3);
+  assert.equal(context.fallback_day_type, 'workout');
+  assert.equal(context.active_energy_kcal, 700);
+  assert.equal(context.resting_energy_kcal, 2000);
+  assert.equal(context.tdee_kcal, 2700);
+});
+
+test('macro TDEE context falls back to recent Apple history when there are too few same day-type rows', () => {
+  resetHealthImportAndScheduleState();
+  const fridayTemplateId = db.createTemplate('Friday Program');
+  db.addScheduleEntry(4, fridayTemplateId);
+
+  db.initWorkoutFromTemplate('2026-04-17', fridayTemplateId);
+  db.upsertHealthDailyMetrics({
+    date: '2026-04-17',
+    sourceType: 'apple_health',
+    activeEnergyKj: 900 * 4.184,
+    restingEnergyKj: 2100 * 4.184,
+    activeEnergyKcal: 900,
+    restingEnergyKcal: 2100,
+    tdeeKcal: 3000,
+    sampleCountActive: 1,
+    sampleCountResting: 1,
+    sourceFile: 'fallback-recent.json',
+    sourceSnapshotDate: '2026-04-20',
+  });
+  for (const [date, active, resting] of [
+    ['2026-04-18', 300, 1800],
+    ['2026-04-19', 400, 1900],
+  ]) {
+    db.upsertHealthDailyMetrics({
+      date,
+      sourceType: 'apple_health',
+      activeEnergyKj: active * 4.184,
+      restingEnergyKj: resting * 4.184,
+      activeEnergyKcal: active,
+      restingEnergyKcal: resting,
+      tdeeKcal: active + resting,
+      sampleCountActive: 1,
+      sampleCountResting: 1,
+      sourceFile: 'fallback-recent.json',
+      sourceSnapshotDate: '2026-04-20',
+    });
+  }
+
+  const context = db.getMacroTdeeContextForDate('2026-04-24');
+  assert.equal(context.source, 'fallback_recent');
+  assert.equal(context.fallback_sample_count, 3);
+  assert.equal(context.fallback_day_type, 'workout');
+  assert.equal(context.active_energy_kcal, 533.3);
+  assert.equal(context.resting_energy_kcal, 1933.3);
+  assert.equal(context.tdee_kcal, 2466.7);
+});
+
+test('nutrition summary range aggregates macro logs, targets, and fallback health context', () => {
+  resetHealthImportAndScheduleState();
+  const sqlite = db.getDb();
+  sqlite.prepare('DELETE FROM macro_logs').run();
+  sqlite.prepare('DELETE FROM meal_templates').run();
+  sqlite.prepare('DELETE FROM user_settings').run();
+
+  const tuesdayTemplateId = db.createTemplate('Summary Tuesday');
+  db.addScheduleEntry(1, tuesdayTemplateId);
+  db.initWorkoutFromTemplate('2026-04-21', tuesdayTemplateId);
+
+  db.setUserSetting('macro_targets_workout', JSON.stringify({ calories: 2200, protein_g: 180, energy_target: -400 }));
+  db.setUserSetting('macro_targets_rest', JSON.stringify({ calories: 1900, protein_g: 160, energy_target: -300 }));
+
+  db.createMacroLog({
+    date: '2026-04-20',
+    meal_name: 'Rest Meals',
+    calories_kcal: 1800,
+    protein_g: 165,
+    carbs_g: 0,
+    fat_g: 0,
+  });
+  db.createMacroLog({
+    date: '2026-04-21',
+    meal_name: 'Workout Meals',
+    calories_kcal: 2100,
+    protein_g: 175,
+    carbs_g: 0,
+    fat_g: 0,
+  });
+
+  for (const [date, active, resting] of [
+    ['2026-04-19', 300, 1700],
+    ['2026-04-20', 400, 1800],
+    ['2026-04-21', 700, 2000],
+  ]) {
+    db.upsertHealthDailyMetrics({
+      date,
+      sourceType: 'apple_health',
+      activeEnergyKj: active * 4.184,
+      restingEnergyKj: resting * 4.184,
+      activeEnergyKcal: active,
+      restingEnergyKcal: resting,
+      tdeeKcal: active + resting,
+      sampleCountActive: 1,
+      sampleCountResting: 1,
+      sourceFile: 'summary-range.json',
+      sourceSnapshotDate: '2026-04-22',
+    });
+  }
+
+  const summary = db.getNutritionSummaryForRange('2026-04-20', '2026-04-22');
+  assert.equal(summary.summary.total_days, 3);
+  assert.equal(summary.summary.logged_days, 2);
+  assert.equal(summary.summary.direct_health_days, 2);
+  assert.equal(summary.summary.estimated_health_days, 1);
+  assert.equal(summary.summary.avg_calories_kcal, 1950);
+  assert.equal(summary.summary.avg_protein_g, 170);
+  assert.equal(summary.summary.energy_target_hit_days, 1);
+
+  const day21 = summary.days.find(day => day.date === '2026-04-21');
+  assert.equal(day21.is_workout_day, true);
+  assert.equal(day21.target_energy_kcal, -400);
+  assert.equal(day21.health_source, 'apple_health');
+
+  const day22 = summary.days.find(day => day.date === '2026-04-22');
+  assert.equal(day22.is_workout_day, false);
+  assert.equal(day22.health_source, 'fallback_recent');
+  assert.equal(day22.tdee_kcal, 2300);
+  assert.equal(day22.energy_balance_kcal, null);
+});
+
 test('merged history includes standalone external workouts', () => {
   const { templateId } = buildTemplate('Smoke-History-Tracked', [
     { name: 'Smoke History Lift', targetSets: 3, targetReps: '8' },
@@ -425,6 +594,7 @@ test('full raw workout storage writes a JSON file into the health-raw/workouts s
 });
 
 test('uploaded snapshot import skips the latest metric date in the file', () => {
+  resetHealthImportAndScheduleState();
   const source = normalizeImportSource('upload.json', {
     data: {
       workouts: [],

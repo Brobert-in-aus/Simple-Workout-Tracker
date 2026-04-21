@@ -1,6 +1,7 @@
 import { api } from '../core/api.js';
-import { todayStr } from '../core/dates.js';
+import { formatDate, todayStr } from '../core/dates.js';
 import { showToast, openAppModal } from '../core/ui.js';
+import { buildLineChart, wireExpandableCharts } from './progress/charts.js';
 
 // Target range constants — hardcoded, not configurable
 const CAL_RANGE  = 100; // ±kcal to be considered "on target"
@@ -8,9 +9,12 @@ const PROT_RANGE = 15;  // ±g protein to be considered "on target"
 
 // Module-level state
 let currentDate = todayStr();
+let currentView = 'day';
+let summaryRange = '1m';
 let templates = null;
 let targets = null;
 let logData = null; // { logs: [], is_workout_day: bool, tdee_kcal: number|null, health_metrics?: {...} }
+let summaryData = null;
 
 // Per-session save tracking (reset on navigation)
 let saveTimers = {};
@@ -18,28 +22,91 @@ let creatingSlots = {}; // guard against concurrent POST for same slot
 
 export async function loadNutrition() {
   currentDate = todayStr();
+  currentView = 'day';
+  summaryRange = '1m';
+  summaryData = null;
   const container = document.getElementById('tab-nutrition');
   renderShell(container);
-  await fetchAll();
+  await fetchBaseData();
+  await fetchCurrentViewData();
   renderContent();
 }
 
 function renderShell(container) {
   container.innerHTML = `
-    <div class="nutrition-date-nav">
-      <button id="nutr-prev" class="btn-icon">&larr;</button>
-      <span id="nutr-date-display"></span>
-      <button id="nutr-today" class="btn-icon btn-today">Today</button>
-      <button id="nutr-next" class="btn-icon">&rarr;</button>
+    <div class="nutrition-topbar">
+      <div id="nutrition-view-toggle"></div>
+      <div id="nutrition-nav"></div>
     </div>
     <div id="nutrition-content"></div>
   `;
-  document.getElementById('nutr-prev').addEventListener('click', () => navigate(-1));
-  document.getElementById('nutr-next').addEventListener('click', () => navigate(1));
-  document.getElementById('nutr-today').addEventListener('click', () => {
-    currentDate = todayStr();
-    fetchDayAndRender();
+}
+
+function renderChrome() {
+  const toggleEl = document.getElementById('nutrition-view-toggle');
+  const navEl = document.getElementById('nutrition-nav');
+  if (!toggleEl || !navEl) return;
+
+  toggleEl.innerHTML = `
+    <div class="nutrition-view-toggle">
+      <button class="nutrition-view-btn ${currentView === 'day' ? 'active' : ''}" data-view="day">Day</button>
+      <button class="nutrition-view-btn ${currentView === 'summary' ? 'active' : ''}" data-view="summary">Summary</button>
+    </div>
+  `;
+
+  navEl.innerHTML = currentView === 'day'
+    ? `
+      <div class="nutrition-date-nav">
+        <button id="nutr-prev" class="btn-icon">&larr;</button>
+        <span id="nutr-date-display"></span>
+        <button id="nutr-today" class="btn-icon btn-today">Today</button>
+        <button id="nutr-next" class="btn-icon">&rarr;</button>
+      </div>
+    `
+    : `
+      <div class="nutrition-summary-nav">
+        <div class="nutrition-range-pills">
+          ${['1m', '3m', '6m', 'all'].map(range => `
+            <button class="nutrition-range-pill ${summaryRange === range ? 'active' : ''}" data-range="${range}">
+              ${range === 'all' ? 'All' : range.toUpperCase()}
+            </button>
+          `).join('')}
+        </div>
+      </div>
+    `;
+
+  toggleEl.querySelectorAll('.nutrition-view-btn').forEach(btn => {
+    btn.addEventListener('click', () => switchNutritionView(btn.dataset.view));
   });
+
+  if (currentView === 'day') {
+    document.getElementById('nutr-prev').addEventListener('click', () => navigate(-1));
+    document.getElementById('nutr-next').addEventListener('click', () => navigate(1));
+    document.getElementById('nutr-today').addEventListener('click', () => {
+      currentDate = todayStr();
+      fetchDayAndRender();
+    });
+  } else {
+    navEl.querySelectorAll('.nutrition-range-pill').forEach(btn => {
+      btn.addEventListener('click', () => setSummaryRange(btn.dataset.range));
+    });
+  }
+}
+
+async function switchNutritionView(view) {
+  if (view === currentView) return;
+  currentView = view;
+  if (view === 'summary' && !summaryData) {
+    await fetchSummaryAndRender();
+    return;
+  }
+  renderContent();
+}
+
+async function setSummaryRange(range) {
+  if (range === summaryRange) return;
+  summaryRange = range;
+  await fetchSummaryAndRender();
 }
 
 async function navigate(days) {
@@ -52,26 +119,54 @@ async function navigate(days) {
   await fetchDayAndRender();
 }
 
-async function fetchAll() {
-  [templates, targets, logData] = await Promise.all([
+async function fetchBaseData() {
+  [templates, targets] = await Promise.all([
     api('/api/nutrition/templates'),
     api('/api/nutrition/targets'),
-    api(`/api/nutrition/logs/${currentDate}`),
   ]);
+}
+
+async function fetchCurrentViewData() {
+  if (currentView === 'summary') {
+    await fetchSummaryData();
+    return;
+  }
+  await fetchDayData();
+}
+
+async function fetchDayData() {
+  logData = await api(`/api/nutrition/logs/${currentDate}`);
+}
+
+async function fetchSummaryData() {
+  summaryData = await api(`/api/nutrition/summary?range=${encodeURIComponent(summaryRange)}`);
 }
 
 async function fetchDayAndRender() {
   saveTimers = {};
   creatingSlots = {};
-  logData = await api(`/api/nutrition/logs/${currentDate}`);
+  await fetchDayData();
+  renderContent();
+}
+
+async function fetchSummaryAndRender() {
+  await fetchSummaryData();
   renderContent();
 }
 
 function renderContent() {
   const el = document.getElementById('nutrition-content');
   if (!el) return;
+  renderChrome();
+  if (currentView === 'summary') {
+    renderSummaryContent(el);
+    return;
+  }
   updateDateDisplay();
+  renderDayContent(el);
+}
 
+function renderDayContent(el) {
   const { logs, is_workout_day: isWorkout } = logData;
   const tgt = isWorkout ? targets.workout : targets.rest;
 
@@ -110,6 +205,162 @@ function updateDateDisplay() {
   const d = new Date(currentDate + 'T00:00:00');
   const label = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
   el.textContent = currentDate === todayStr() ? `Today · ${label}` : label;
+}
+
+function formatAverageEnergyBalance(value) {
+  if (value == null) return '—';
+  if (value === 0) return 'Balanced';
+  return `${value < 0 ? 'Deficit' : 'Surplus'} ${Math.abs(Math.round(value))} kcal`;
+}
+
+function summaryHeroHTML(data) {
+  const summary = data.summary;
+  if (summary.display_days === 0) {
+    return `
+      <div class="nutrition-summary-hero">
+        <div class="nutrition-summary-kicker">Summary</div>
+        <div class="nutrition-summary-title">No nutrition or Apple Health data yet</div>
+        <div class="nutrition-summary-subtitle">Add meals or import Apple Health data to unlock trend views.</div>
+      </div>
+    `;
+  }
+
+  const title = summary.logged_days > 0
+    ? `${summary.logged_days} logged day${summary.logged_days === 1 ? '' : 's'} in this range`
+    : `${summary.display_days} day${summary.display_days === 1 ? '' : 's'} of Apple Health data`;
+
+  return `
+    <div class="nutrition-summary-hero">
+      <div class="nutrition-summary-kicker">Summary</div>
+      <div class="nutrition-summary-title">${title}</div>
+      <div class="nutrition-summary-subtitle">${formatDate(data.start_date)} to ${formatDate(data.end_date)}</div>
+    </div>
+  `;
+}
+
+function summaryStatCardHTML(label, value, note = '') {
+  return `
+    <div class="nutrition-summary-stat">
+      <div class="nutrition-summary-stat-label">${label}</div>
+      <div class="nutrition-summary-stat-value">${value}</div>
+      ${note ? `<div class="nutrition-summary-stat-note">${note}</div>` : ''}
+    </div>
+  `;
+}
+
+function summaryChartCardHTML(title, svg, subtitle = '') {
+  return `
+    <div class="progress-chart-card">
+      <div class="progress-chart-title">${title}</div>
+      ${svg}
+      ${subtitle ? `<div class="progress-helper-text">${subtitle}</div>` : ''}
+    </div>
+  `;
+}
+
+function summaryDayRowHTML(day) {
+  const sourceLabel = day.health_source_direct
+    ? 'Apple'
+    : day.health_source_estimated
+      ? 'Estimate'
+      : day.has_logs
+        ? 'Food Only'
+        : '';
+  const balanceLabel = day.energy_balance_kcal == null
+    ? '—'
+    : `${day.energy_balance_kcal < 0 ? 'Def' : day.energy_balance_kcal > 0 ? 'Sur' : 'Bal'} ${Math.abs(day.energy_balance_kcal)} kcal`;
+  return `
+    <div class="nutrition-summary-day-row">
+      <div class="nutrition-summary-day-main">
+        <div class="nutrition-summary-day-title">${formatDate(day.date)}</div>
+        <div class="nutrition-summary-day-meta">
+          <span class="nutrition-day-badge ${day.is_workout_day ? 'training' : 'rest'}">${day.is_workout_day ? 'Training' : 'Rest'}</span>
+          ${sourceLabel ? `<span class="nutrition-summary-source">${sourceLabel}</span>` : ''}
+        </div>
+      </div>
+      <div class="nutrition-summary-day-stats">
+        <span>${day.calories_kcal} kcal</span>
+        <span>${day.protein_g} g protein</span>
+        <span>${day.tdee_kcal == null ? 'No TDEE' : `${day.tdee_kcal} kcal TDEE`}</span>
+        <span>${balanceLabel}</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderSummaryContent(el) {
+  const data = summaryData;
+  if (!data) {
+    el.innerHTML = '<div class="chart-empty">Loading summary…</div>';
+    return;
+  }
+
+  const summary = data.summary;
+  const firstLoggedDate = data.days.find(day => day.has_logs)?.date ?? null;
+  const energyPoints = data.days
+    .filter(day => day.has_logs && day.energy_balance_kcal != null && (!firstLoggedDate || day.date >= firstLoggedDate))
+    .map(day => ({ date: day.date, value: day.energy_balance_kcal }));
+  const caloriePoints = data.days
+    .filter(day => day.has_logs)
+    .map(day => ({ date: day.date, value: day.calories_kcal }));
+  const activeEnergyPoints = data.days
+    .filter(day => day.active_energy_kcal != null)
+    .map(day => ({ date: day.date, value: day.active_energy_kcal }));
+  const activeDays = data.days
+    .filter(day => day.has_logs || day.has_health_metrics)
+    .slice()
+    .reverse()
+    .slice(0, 30);
+
+  el.innerHTML = `
+    ${summaryHeroHTML(data)}
+    <div class="nutrition-summary-stats">
+      ${summaryStatCardHTML('Avg Intake', summary.avg_calories_kcal == null ? '—' : `${Math.round(summary.avg_calories_kcal)} kcal`, summary.logged_days > 0 ? `${summary.logged_days} logged day${summary.logged_days === 1 ? '' : 's'}` : 'No logged meals')}
+      ${summaryStatCardHTML('Avg Protein', summary.avg_protein_g == null ? '—' : `${Math.round(summary.avg_protein_g)} g`, `${summary.protein_target_hit_days} day${summary.protein_target_hit_days === 1 ? '' : 's'} on target`)}
+      ${summaryStatCardHTML('Avg Balance', formatAverageEnergyBalance(summary.avg_energy_balance_kcal), `${summary.energy_target_hit_days} day${summary.energy_target_hit_days === 1 ? '' : 's'} on target`)}
+      ${summaryStatCardHTML('Apple Health', `${summary.direct_health_days} direct / ${summary.estimated_health_days} estimated`, summary.avg_tdee_kcal == null ? 'No TDEE data' : `Avg TDEE ${Math.round(summary.avg_tdee_kcal)} kcal`)}
+    </div>
+    <div class="nutrition-summary-charts">
+      ${summaryChartCardHTML(
+        'Energy Balance',
+        buildLineChart(energyPoints, {
+          emptyMsg: 'Need both food and TDEE data',
+          lineClass: 'chart-line-energy',
+          formatY: value => `${Math.round(value)}`
+        }),
+        'Negative values are deficits. Positive values are surpluses.'
+      )}
+      ${summaryChartCardHTML(
+        'Calories Logged',
+        buildLineChart(caloriePoints, {
+          emptyMsg: 'No logged meals in this range',
+          lineClass: 'chart-line-calories'
+        }),
+        'Daily food totals for days with at least one logged meal.'
+      )}
+      ${summaryChartCardHTML(
+        'Active Energy',
+        buildLineChart(activeEnergyPoints, {
+          emptyMsg: 'No Apple Health active energy in this range',
+          lineClass: 'chart-line-active'
+        }),
+        'Includes corrected Apple Health active energy when a workout factor is set.'
+      )}
+    </div>
+    <div class="nutrition-summary-totals">
+      <span>${summary.calorie_target_hit_days} calorie-target day${summary.calorie_target_hit_days === 1 ? '' : 's'}</span>
+      <span>${summary.protein_target_hit_days} protein-target day${summary.protein_target_hit_days === 1 ? '' : 's'}</span>
+      <span>${summary.energy_target_hit_days} energy-target day${summary.energy_target_hit_days === 1 ? '' : 's'}</span>
+    </div>
+    <div class="nutrition-summary-days">
+      <div class="nutrition-summary-days-title">Recent Active Days</div>
+      ${activeDays.length === 0
+        ? '<div class="chart-empty">No days with logged meals or Apple data in this range.</div>'
+        : activeDays.map(summaryDayRowHTML).join('')}
+    </div>
+  `;
+
+  wireExpandableCharts(el);
 }
 
 // --- Option A migration point ---
@@ -320,7 +571,7 @@ function totalsHTML(totals, tgt, logData) {
   let deficitRow = '';
   if (tdeeKcal != null) {
     const actualBalance = Math.round(totals.cal) - tdeeKcal;
-    const defTgt = tgt?.deficit_target ?? null;
+    const defTgt = tgt?.energy_target ?? null;
     const energyDisplay = getEnergyBalanceDisplay(actualBalance, defTgt, CAL_RANGE);
     const tgtStr = energyDisplay.targetDisplay != null ? ` / ${energyDisplay.targetDisplay}` : '';
     const noteHtml = energyDisplay.note ? `<span class="totals-note-inline">${energyDisplay.note}</span>` : '';
@@ -330,6 +581,14 @@ function totalsHTML(totals, tgt, logData) {
         <span class="totals-value ${energyDisplay.className}">${energyDisplay.actualDisplay}${tgtStr} kcal ${noteHtml}</span>
       </div>`;
   }
+
+  const tdeeLabel = !healthMetrics
+    ? 'TDEE'
+    : healthMetrics.source === 'apple_health'
+      ? 'TDEE'
+      : currentDate === todayStr()
+        ? 'TDEE (Predicted)'
+        : 'TDEE (Estimated)';
 
   const healthRows = healthMetrics ? `
       <div class="totals-row">
@@ -341,7 +600,7 @@ function totalsHTML(totals, tgt, logData) {
         <span class="totals-value">${Math.round(healthMetrics.active_energy_kcal || 0)} kcal</span>
       </div>
       <div class="totals-row">
-        <span class="totals-label">TDEE</span>
+        <span class="totals-label">${tdeeLabel}</span>
         <span class="totals-value">${Math.round(healthMetrics.tdee_kcal || 0)} kcal</span>
       </div>
   ` : '';
@@ -701,7 +960,7 @@ function tmplMacroHTML(field, label, value) {
 
 function targetFieldsHTML(profile, tgt) {
   // carbs_g and fat_g are stored in DB but hidden from UI for now
-  const energyMeta = getEnergyTargetFieldMeta(tgt?.deficit_target ?? null);
+  const energyMeta = getEnergyTargetFieldMeta(tgt?.energy_target ?? null);
   return `
     <div class="target-field">
       <label>Calories (kcal)</label>
@@ -715,8 +974,8 @@ function targetFieldsHTML(profile, tgt) {
     </div>
     <div class="target-field ${energyMeta.className}">
       <label class="energy-target-label">${energyMeta.label}</label>
-      <input type="text" class="target-input" data-profile="${profile}" data-field="deficit_target"
-             value="${tgt?.deficit_target ?? ''}" inputmode="text" autocapitalize="off" spellcheck="false" placeholder="Deficit/Surplus">
+      <input type="text" class="target-input" data-profile="${profile}" data-field="energy_target"
+             value="${tgt?.energy_target ?? ''}" inputmode="text" autocapitalize="off" spellcheck="false" placeholder="Deficit/Surplus">
       <div class="target-field-hint">Enter negative for a deficit, positive for a surplus.</div>
     </div>`;
 }
@@ -762,7 +1021,7 @@ function wireSettingsModal(tmpl, tgt) {
     renderSettingsModal(templates, targets);
   });
 
-  document.querySelectorAll('.target-input[data-field="deficit_target"]').forEach(inp => {
+  document.querySelectorAll('.target-input[data-field="energy_target"]').forEach(inp => {
     syncEnergyTargetField(inp);
     inp.addEventListener('input', () => syncEnergyTargetField(inp));
   });
@@ -779,8 +1038,8 @@ function wireSettingsModal(tmpl, tgt) {
       }
       const obj = inp.dataset.profile === 'workout' ? workout : rest;
       const raw = inp.value.trim();
-      // deficit_target is optional — blank means no target (null), not zero
-      if (inp.dataset.field === 'deficit_target') {
+      // energy_target is optional — blank means no target (null), not zero
+      if (inp.dataset.field === 'energy_target') {
         obj[inp.dataset.field] = raw === '' ? null : parseFloat(raw);
       } else {
         obj[inp.dataset.field] = parseFloat(raw) || 0;

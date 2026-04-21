@@ -1580,35 +1580,233 @@ function getRecentHealthDailyMetrics(limit = 14) {
   `).all(limit);
 }
 
-function getMacroTdeeContextForDate(date) {
-  const row = getHealthDailyMetricsByDate(date);
-  if (!row) return null;
-  const adjustments = getAppleHealthEnergyAdjustments();
+function round1(value) {
+  return value == null ? null : Math.round(value * 10) / 10;
+}
+
+function round0(value) {
+  return value == null ? null : Math.round(value);
+}
+
+function addDaysToIso(date, days) {
+  const next = new Date(`${date}T00:00:00`);
+  next.setDate(next.getDate() + days);
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
+}
+
+function listIsoDates(startDate, endDate) {
+  const dates = [];
+  for (let date = startDate; date <= endDate; date = addDaysToIso(date, 1)) {
+    dates.push(date);
+  }
+  return dates;
+}
+
+function normalizeMacroTargetProfile(profile = {}) {
+  const normalized = { ...profile };
+  if (normalized.energy_target == null && normalized.deficit_target != null) {
+    normalized.energy_target = normalized.deficit_target;
+  }
+  delete normalized.deficit_target;
+  return normalized;
+}
+
+function getStoredMacroTargetProfile(settingKey) {
+  const raw = getUserSetting(settingKey);
+  if (!raw) return { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, energy_target: null };
+  try {
+    return normalizeMacroTargetProfile(JSON.parse(raw));
+  } catch (err) {
+    return { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, energy_target: null };
+  }
+}
+
+function isEnergyTargetHit(actualBalance, targetBalance, range = 100) {
+  if (typeof targetBalance !== 'number') return false;
+  if (targetBalance === 0) return Math.abs(actualBalance || 0) <= range;
+  if (typeof actualBalance !== 'number') return false;
+  const targetDirection = targetBalance < 0 ? 'deficit' : 'surplus';
+  const actualDirection = actualBalance < 0 ? 'deficit' : actualBalance > 0 ? 'surplus' : 'balance';
+  if (actualDirection !== targetDirection) return false;
+  return Math.abs(Math.abs(actualBalance) - Math.abs(targetBalance)) <= range;
+}
+
+function getActiveAdjustmentKcalForDate(date, adjustments = null) {
+  const appliedAdjustments = adjustments || getAppleHealthEnergyAdjustments();
   const workoutRows = db.prepare(`
     SELECT ew.workout_type, ewm.active_energy_kcal
     FROM external_workouts ew
     JOIN external_workout_metrics ewm ON ewm.external_workout_id = ew.id
     WHERE ew.date = ? AND ewm.active_energy_kcal IS NOT NULL
   `).all(date);
-  const activeAdjustmentKcal = workoutRows.reduce((sum, workout) => {
+  return workoutRows.reduce((sum, workout) => {
     const factor = workout.workout_type === 'Functional Strength Training'
-      ? adjustments.functional_strength_training_factor
+      ? appliedAdjustments.functional_strength_training_factor
       : 1;
     return sum + ((workout.active_energy_kcal || 0) * factor) - (workout.active_energy_kcal || 0);
   }, 0);
+}
+
+function buildMacroTdeeContextFromRow(row, adjustments = null) {
+  if (!row) return null;
+  const appliedAdjustments = adjustments || getAppleHealthEnergyAdjustments();
+  const activeAdjustmentKcal = getActiveAdjustmentKcalForDate(row.date, appliedAdjustments);
   const activeEnergyKcal = row.active_energy_kcal == null
     ? null
-    : Math.round((row.active_energy_kcal + activeAdjustmentKcal) * 10) / 10;
+    : round1(row.active_energy_kcal + activeAdjustmentKcal);
   const tdeeKcal = ((row.resting_energy_kcal ?? 0) + (activeEnergyKcal ?? 0));
   return {
     date: row.date,
     active_energy_kcal: activeEnergyKcal,
     active_energy_kcal_raw: row.active_energy_kcal,
-    active_energy_adjustment_kcal: Math.round(activeAdjustmentKcal * 10) / 10,
+    active_energy_adjustment_kcal: round1(activeAdjustmentKcal),
     resting_energy_kcal: row.resting_energy_kcal,
-    tdee_kcal: Math.round(tdeeKcal * 10) / 10,
+    tdee_kcal: round1(tdeeKcal),
     tdee_kcal_raw: row.tdee_kcal,
+    apple_health_adjustments: appliedAdjustments,
+  };
+}
+
+function getMacroTdeeContextForDate(date) {
+  const adjustments = getAppleHealthEnergyAdjustments();
+  const row = getHealthDailyMetricsByDate(date);
+  if (row) {
+    return {
+      ...buildMacroTdeeContextFromRow(row, adjustments),
+      source: 'apple_health',
+      fallback_sample_count: 0,
+    };
+  }
+
+  const targetIsWorkoutDay = isWorkoutDayForNutrition(date);
+  const recentRows = db.prepare(`
+    SELECT * FROM health_daily_metrics
+    WHERE date < ?
+    ORDER BY date DESC
+    LIMIT 60
+  `).all(date);
+  const recentContexts = recentRows.map(metricRow => ({
+    ...buildMacroTdeeContextFromRow(metricRow, adjustments),
+    is_workout_day: isWorkoutDayForNutrition(metricRow.date, date),
+  }));
+  const sameTypeContexts = recentContexts.filter(item => item.is_workout_day === targetIsWorkoutDay).slice(0, 14);
+  const selected = sameTypeContexts.length >= 3 ? sameTypeContexts : recentContexts.slice(0, 14);
+  if (selected.length === 0) return null;
+
+  const average = key => round1(selected.reduce((sum, item) => sum + (item[key] ?? 0), 0) / selected.length);
+  return {
+    date,
+    active_energy_kcal: average('active_energy_kcal'),
+    active_energy_kcal_raw: average('active_energy_kcal_raw'),
+    active_energy_adjustment_kcal: average('active_energy_adjustment_kcal'),
+    resting_energy_kcal: average('resting_energy_kcal'),
+    tdee_kcal: average('tdee_kcal'),
+    tdee_kcal_raw: average('tdee_kcal_raw'),
     apple_health_adjustments: adjustments,
+    source: sameTypeContexts.length >= 3 ? 'fallback_same_day_type' : 'fallback_recent',
+    fallback_sample_count: selected.length,
+    fallback_day_type: targetIsWorkoutDay ? 'workout' : 'rest',
+  };
+}
+
+function getNutritionSummaryForRange(startDate, endDate) {
+  const logRows = db.prepare(`
+    SELECT
+      date,
+      COUNT(*) AS meal_count,
+      SUM(calories_kcal) AS calories_kcal,
+      SUM(protein_g) AS protein_g,
+      SUM(carbs_g) AS carbs_g,
+      SUM(fat_g) AS fat_g
+    FROM macro_logs
+    WHERE date >= ? AND date <= ?
+    GROUP BY date
+    ORDER BY date ASC
+  `).all(startDate, endDate);
+
+  const logMap = new Map(logRows.map(row => [row.date, row]));
+  const workoutTargets = getStoredMacroTargetProfile('macro_targets_workout');
+  const restTargets = getStoredMacroTargetProfile('macro_targets_rest');
+  const directHealthDates = new Set(
+    getHealthDailyMetricsRange(startDate, endDate).map(row => row.date)
+  );
+
+  const days = listIsoDates(startDate, endDate).map(date => {
+    const logRow = logMap.get(date) || null;
+    const health = getMacroTdeeContextForDate(date);
+    const isWorkoutDay = isWorkoutDayForNutrition(date);
+    const target = isWorkoutDay ? workoutTargets : restTargets;
+    const calories = round0(logRow?.calories_kcal ?? 0);
+    const protein = round0(logRow?.protein_g ?? 0);
+    const carbs = round0(logRow?.carbs_g ?? 0);
+    const fat = round0(logRow?.fat_g ?? 0);
+    const tdee = health?.tdee_kcal != null ? round0(health.tdee_kcal) : null;
+    const balance = tdee == null || !logRow ? null : calories - tdee;
+    const directHealth = directHealthDates.has(date);
+
+    return {
+      date,
+      is_workout_day: isWorkoutDay,
+      has_logs: !!logRow,
+      meal_count: logRow?.meal_count ?? 0,
+      calories_kcal: calories,
+      protein_g: protein,
+      carbs_g: carbs,
+      fat_g: fat,
+      target_calories: typeof target.calories === 'number' ? target.calories : null,
+      target_protein_g: typeof target.protein_g === 'number' ? target.protein_g : null,
+      target_energy_kcal: typeof target.energy_target === 'number' ? target.energy_target : null,
+      has_health_metrics: !!health,
+      health_source: health?.source ?? null,
+      health_source_direct: directHealth,
+      health_source_estimated: !!health && !directHealth,
+      active_energy_kcal: health?.active_energy_kcal != null ? round0(health.active_energy_kcal) : null,
+      resting_energy_kcal: health?.resting_energy_kcal != null ? round0(health.resting_energy_kcal) : null,
+      tdee_kcal: tdee,
+      energy_balance_kcal: balance,
+      calorie_target_hit: !!logRow && typeof target.calories === 'number' && target.calories > 0
+        ? Math.abs(calories - target.calories) <= 100
+        : false,
+      protein_target_hit: !!logRow && typeof target.protein_g === 'number' && target.protein_g > 0
+        ? Math.abs(protein - target.protein_g) <= 15
+        : false,
+      energy_target_hit: !!logRow && typeof balance === 'number' && typeof target.energy_target === 'number'
+        ? isEnergyTargetHit(balance, target.energy_target, 100)
+        : false,
+    };
+  });
+
+  const withLogs = days.filter(day => day.has_logs);
+  const withHealth = days.filter(day => day.has_health_metrics);
+  const withBalance = days.filter(day => day.has_logs && typeof day.energy_balance_kcal === 'number');
+  const average = (rows, key) => rows.length === 0
+    ? null
+    : round1(rows.reduce((sum, row) => sum + (row[key] ?? 0), 0) / rows.length);
+  const balanceAverage = average(withBalance, 'energy_balance_kcal');
+
+  return {
+    start_date: startDate,
+    end_date: endDate,
+    days,
+    summary: {
+      total_days: days.length,
+      logged_days: withLogs.length,
+      workout_days: days.filter(day => day.is_workout_day).length,
+      rest_days: days.filter(day => !day.is_workout_day).length,
+      direct_health_days: days.filter(day => day.health_source_direct).length,
+      estimated_health_days: days.filter(day => day.health_source_estimated).length,
+      avg_calories_kcal: average(withLogs, 'calories_kcal'),
+      avg_protein_g: average(withLogs, 'protein_g'),
+      avg_active_energy_kcal: average(withHealth, 'active_energy_kcal'),
+      avg_resting_energy_kcal: average(withHealth, 'resting_energy_kcal'),
+      avg_tdee_kcal: average(withHealth, 'tdee_kcal'),
+      avg_energy_balance_kcal: balanceAverage,
+      avg_energy_direction: balanceAverage == null ? null : balanceAverage < 0 ? 'deficit' : balanceAverage > 0 ? 'surplus' : 'balance',
+      calorie_target_hit_days: days.filter(day => day.calorie_target_hit).length,
+      protein_target_hit_days: days.filter(day => day.protein_target_hit).length,
+      energy_target_hit_days: days.filter(day => day.energy_target_hit).length,
+      display_days: days.filter(day => day.has_logs || day.has_health_metrics).length,
+    },
   };
 }
 
@@ -1740,6 +1938,7 @@ module.exports = {
   deleteHealthDailyMetricsByDate,
   getRecentHealthDailyMetrics,
   getMacroTdeeContextForDate,
+  getNutritionSummaryForRange,
   // TDEE / health metrics
   getDailyTdee,
 };
