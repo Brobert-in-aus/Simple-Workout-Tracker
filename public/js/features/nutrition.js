@@ -1048,8 +1048,22 @@ function wireSettingsModal(tmpl, tgt) {
     await api('/api/nutrition/targets', { method: 'PUT', body: { workout, rest, apple_health_adjustments } });
     targets = { workout, rest, apple_health_adjustments };
     showToast('Targets saved');
-    // Use updateTotalsDisplay (reads from live DOM) instead of renderContent()
-    // to avoid wiping in-session logged state that hasn't been written back to logData.
+    if (currentView === 'summary') {
+      await fetchSummaryData();
+      renderContent();
+      return;
+    }
+
+    // Refresh TDEE/health context so Apple Health adjustment changes are reflected
+    // immediately without waiting for a full tab reload. Preserve the current in-DOM
+    // meal edits rather than re-rendering the day from potentially stale logData.
+    const latestDayData = await api(`/api/nutrition/logs/${currentDate}`);
+    logData = {
+      ...logData,
+      is_workout_day: latestDayData.is_workout_day,
+      tdee_kcal: latestDayData.tdee_kcal,
+      health_metrics: latestDayData.health_metrics,
+    };
     updateTotalsDisplay();
   });
 }
