@@ -2532,6 +2532,18 @@ html, body {
   transform: translateX(-100%);
 }
 
+.calorie-value-hit {
+  color: var(--success);
+}
+
+.calorie-value-over-target {
+  color: var(--beige);
+}
+
+.calorie-value-overflow {
+  color: var(--text-warn);
+}
+
 .calorie-progress-main.with-overflow .calorie-progress-bar {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
@@ -2567,7 +2579,7 @@ html, body {
 }
 
 .calorie-progress-segment-over {
-  background: var(--olive);
+  background: var(--beige);
 }
 
 .calorie-progress-overflow-slot {

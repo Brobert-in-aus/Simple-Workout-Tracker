@@ -562,13 +562,24 @@ function getEnergyBalanceDisplayForProgress(actualBalance, targetBalance, range,
   const actualDirection = getEnergyDirection(actualBalance);
   const targetDirection = getEnergyDirection(targetBalance);
   const actualMagnitude = actualDirection === targetDirection ? Math.abs(actualBalance) : 0;
+  if (targetDirection === 'deficit') {
+    if (actualDirection === 'surplus') {
+      return { ...display, className: 'target-high' };
+    }
+    if (actualMagnitude > targetMagnitude + range) {
+      return { ...display, className: '' };
+    }
+    return display;
+  }
+  if (targetDirection === 'surplus') {
+    if (actualDirection === 'deficit') {
+      return { ...display, className: 'target-high' };
+    }
+  }
   if (actualMagnitude < Math.max(0, targetMagnitude - range)) {
     return { ...display, className: '' };
   }
-  return {
-    ...display,
-    className: getEnergyBalanceDisplay(actualBalance, targetBalance, range).className,
-  };
+  return display;
 }
 
 function getCalorieTargetModel(totals, tgt, logData, isComplete) {
@@ -580,7 +591,8 @@ function getCalorieTargetModel(totals, tgt, logData, isComplete) {
   if (tdeeKcal != null && energyTarget != null) {
     const roundedTdee = Math.round(tdeeKcal);
     const targetCalories = Math.max(0, Math.round(tdeeKcal + energyTarget));
-    const mainTrackMax = energyTarget > 0 ? targetCalories : roundedTdee;
+    const mode = energyTarget < 0 ? 'deficit' : energyTarget > 0 ? 'surplus' : 'maintenance';
+    const mainTrackMax = mode === 'surplus' ? targetCalories : roundedTdee;
     const deficitReserve = energyTarget < 0 ? Math.min(mainTrackMax, Math.abs(Math.round(energyTarget))) : 0;
     const fillPct = mainTrackMax > 0 ? Math.min(100, (actualCalories / mainTrackMax) * 100) : 0;
     const deficitPct = mainTrackMax > 0 ? (deficitReserve / mainTrackMax) * 100 : 0;
@@ -592,12 +604,16 @@ function getCalorieTargetModel(totals, tgt, logData, isComplete) {
       targetCalories,
       displayTarget: targetCalories,
       barMax: mainTrackMax,
+      actualCalories,
       fillPct,
       deficitPct,
       overflowPct,
       overflowKcal,
       tdeeKcal: roundedTdee,
       energyTarget,
+      mode,
+      targetLower: Math.max(0, targetCalories - CAL_RANGE),
+      targetUpper: targetCalories + CAL_RANGE,
       source: 'derived',
       className: getTargetClassForProgress(actualCalories, targetCalories, CAL_RANGE, isComplete),
       label: 'Calories',
@@ -612,12 +628,16 @@ function getCalorieTargetModel(totals, tgt, logData, isComplete) {
     targetCalories: fallbackTarget,
     displayTarget: fallbackTarget,
     barMax: fallbackTarget,
+    actualCalories,
     fillPct,
     deficitPct: 0,
     overflowPct: 0,
     overflowKcal: 0,
     tdeeKcal: tdeeKcal != null ? Math.round(tdeeKcal) : null,
     energyTarget,
+    mode: 'fallback',
+    targetLower: Math.max(0, fallbackTarget - CAL_RANGE),
+    targetUpper: fallbackTarget + CAL_RANGE,
     source: fallbackTarget ? 'fallback' : 'none',
     className: fallbackTarget ? getTargetClassForProgress(actualCalories, fallbackTarget, CAL_RANGE, isComplete) : '',
     label: 'Calories',
@@ -625,15 +645,59 @@ function getCalorieTargetModel(totals, tgt, logData, isComplete) {
   };
 }
 
+function getCalorieFillSegments(model) {
+  if (!model || model.barMax <= 0 || model.actualCalories <= 0) return [];
+  const fillLimit = Math.min(model.actualCalories, model.barMax);
+  const toPct = (value) => Math.max(0, Math.min(100, (value / model.barMax) * 100));
+  const filledPct = toPct(fillLimit);
+
+  if (model.mode === 'deficit') {
+    const greenLimit = Math.min(fillLimit, model.targetUpper);
+    const orangeStart = Math.min(fillLimit, model.targetUpper);
+    if (fillLimit < model.targetLower) {
+      return [{ left: 0, width: filledPct, className: 'calorie-progress-segment-pending' }];
+    }
+    const greenPct = toPct(greenLimit);
+    const segments = [];
+    if (greenPct > 0) {
+      segments.push({ left: 0, width: greenPct, className: 'calorie-progress-segment-hit' });
+    }
+    if (fillLimit > orangeStart) {
+      const orangePct = toPct(fillLimit) - toPct(orangeStart);
+      if (orangePct > 0) {
+        segments.push({ left: toPct(orangeStart), width: orangePct, className: 'calorie-progress-segment-over' });
+      }
+    }
+    return segments;
+  }
+
+  if (fillLimit < model.targetLower) {
+    return [{ left: 0, width: filledPct, className: 'calorie-progress-segment-pending' }];
+  }
+
+  return [{ left: 0, width: filledPct, className: 'calorie-progress-segment-hit' }];
+}
+
+function getCalorieDisplayClass(model) {
+  if (!model || model.actualCalories <= 0) return '';
+  if (model.overflowPct > 0) return 'calorie-value-overflow';
+  if (model.mode === 'deficit' && model.actualCalories > model.targetUpper) return 'calorie-value-over-target';
+  if (model.actualCalories >= model.targetLower) return 'calorie-value-hit';
+  return '';
+}
+
 function calorieBarHTML(model, totals) {
   const targetText = model.displayTarget ? `${Math.round(totals.cal)} / ${model.displayTarget} kcal` : `${Math.round(totals.cal)} kcal`;
-  const overflowWidthPct = model.overflowPct > 0
-    ? Math.max(6, Math.min(15, model.overflowPct * 0.15))
+  const overflowSlotPct = 15;
+  const overflowVisiblePct = model.overflowPct > 0
+    ? Math.max(6, Math.min(100, model.overflowPct))
     : 0;
+  const mainTrackPct = 100 - overflowSlotPct;
   const labelPosPct = model.overflowPct > 0
-    ? Math.min(99, model.fillPct + ((overflowWidthPct * model.overflowPct) / 100))
-    : Math.min(99, Math.max(0, model.fillPct));
+    ? Math.min(99, mainTrackPct + (overflowSlotPct * (overflowVisiblePct / 100)))
+    : Math.min(99, Math.max(0, mainTrackPct * (model.fillPct / 100)));
   const labelAlignClass = labelPosPct < 18 ? 'calorie-progress-value-start' : 'calorie-progress-value-end';
+  const displayClass = getCalorieDisplayClass(model);
   const deficitStatus = model.source === 'derived' && model.energyTarget < 0
     ? `Deficit: ${Math.max(0, model.tdeeKcal - Math.round(totals.cal))} / ${Math.abs(Math.round(model.energyTarget))} kcal`
     : '';
@@ -646,25 +710,30 @@ function calorieBarHTML(model, totals) {
     : model.source === 'fallback'
       ? model.targetLabel
       : '';
+  const fillSegments = getCalorieFillSegments(model)
+    .map(segment => `<div class="calorie-progress-segment ${segment.className}" style="left:${segment.left}%; width:${segment.width}%;"></div>`)
+    .join('');
 
   return `
     <div class="target-bar-row">
       <span class="target-bar-label">Calories</span>
     </div>
-    <div class="calorie-progress-wrap${model.overflowPct > 0 ? ' has-overflow' : ''}" style="grid-template-columns:minmax(0, 1fr) ${overflowWidthPct}%;">
-      <div class="target-bar-value calorie-progress-value ${labelAlignClass} ${model.className}" style="left:${labelPosPct}%;">${targetText}</div>
+    <div class="calorie-progress-wrap${model.overflowPct > 0 ? ' has-overflow' : ''}" style="grid-template-columns:${mainTrackPct}% ${overflowSlotPct}%;">
+      <div class="target-bar-value calorie-progress-value ${labelAlignClass} ${displayClass}" style="left:${labelPosPct}%;">${targetText}</div>
       <div class="calorie-progress-main ${model.overflowPct > 0 ? 'with-overflow' : ''}">
         <div class="targets-progress-bar calorie-progress-bar">
           ${model.deficitPct > 0 ? `<div class="calorie-progress-deficit" style="width:${model.deficitPct}%"></div>` : ''}
-          <div class="targets-progress-fill calorie-progress-fill ${model.className}" style="width:${model.fillPct}%"></div>
+          ${fillSegments}
         </div>
       </div>
-      ${model.overflowPct > 0 ? `<div class="calorie-progress-overflow-fill target-high" style="width:${model.overflowPct}%"></div>` : ''}
+      <div class="calorie-progress-overflow-slot">
+        ${model.overflowPct > 0 ? `<div class="calorie-progress-overflow-fill target-high" style="width:${overflowVisiblePct}%;"></div>` : ''}
+      </div>
     </div>
     ${(deficitStatus || helper) ? `
       <div class="target-bar-helper-row">
         ${helper ? `<div class="target-bar-helper">${helper}</div>` : '<div></div>'}
-        ${deficitStatus ? `<div class="target-bar-helper target-bar-helper-deficit">${deficitStatus}</div>` : ''}
+        ${deficitStatus ? `<div class="target-bar-helper target-bar-helper-deficit" style="margin-right:15%;">${deficitStatus}</div>` : ''}
       </div>
     ` : ''}
   `;
@@ -725,19 +794,24 @@ function totalsHTML(totals, tgt, logData, isComplete = true) {
       : currentDate === todayStr()
         ? 'TDEE (Predicted)'
         : 'TDEE (Estimated)';
+  const isPredictedToday = !!healthMetrics && healthMetrics.source !== 'apple_health' && currentDate === todayStr();
+  const metricValueClass = isPredictedToday ? 'totals-value totals-value-forecast' : 'totals-value';
+  const restingValue = isPredictedToday ? 'TBD' : `${Math.round(healthMetrics?.resting_energy_kcal || 0)} kcal`;
+  const activeValue = isPredictedToday ? 'TBD' : `${Math.round(healthMetrics?.active_energy_kcal || 0)} kcal`;
+  const tdeeValue = `${Math.round(healthMetrics?.tdee_kcal || 0)} kcal`;
 
   const healthRows = healthMetrics ? `
       <div class="totals-row">
         <span class="totals-label">Resting</span>
-        <span class="totals-value">${Math.round(healthMetrics.resting_energy_kcal || 0)} kcal</span>
+        <span class="${metricValueClass}">${restingValue}</span>
       </div>
       <div class="totals-row">
         <span class="totals-label">Active</span>
-        <span class="totals-value">${Math.round(healthMetrics.active_energy_kcal || 0)} kcal</span>
+        <span class="${metricValueClass}">${activeValue}</span>
       </div>
       <div class="totals-row">
         <span class="totals-label">${tdeeLabel}</span>
-        <span class="totals-value">${Math.round(healthMetrics.tdee_kcal || 0)} kcal</span>
+        <span class="${metricValueClass}">${tdeeValue}</span>
       </div>
   ` : '';
 
