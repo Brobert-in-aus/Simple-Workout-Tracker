@@ -329,17 +329,21 @@ app.get('/api/workout/:date', (req, res) => {
   const results = [];
   const existingTemplateIds = new Set(existingWorkouts.map(w => w.day_id));
 
-  // Helper: build cross-template prev data for a list of day_exercises
+  // Helper: build prev data for a list of day_exercises.
+  // targets_independent slots are scoped to the same template so cross-template history
+  // from differently-programmed slots doesn't bleed into the "Previous:" display or pre-fill.
   function buildCrossTemplatePrev(dayExercises, templateId, date) {
     const prevData = [];
     for (const te of dayExercises) {
       const exerciseId = te.exercise_id;
-      const recent = db.getMostRecentExerciseData(exerciseId, date, te.is_warmup);
+      const scopedDayId = te.targets_independent ? templateId : null;
+      const recent = db.getMostRecentExerciseData(exerciseId, date, te.is_warmup, scopedDayId);
       if (recent) {
         prevData.push({
           day_exercise_id: te.id,
           exercise_id: exerciseId,
           exercise_name: te.exercise_name || te.name,
+          is_warmup: te.is_warmup,
           skipped: recent.skipped,
           note: recent.note,
           sets: recent.sets,

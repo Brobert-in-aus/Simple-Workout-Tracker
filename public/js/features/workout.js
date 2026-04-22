@@ -172,7 +172,7 @@ function renderExercisesPreview(container, exercises, previous) {
   for (const group of groups) {
     const isSuperset = group.length > 1;
     group.forEach((ex, idx) => {
-      const prev = findPreviousExercise(ex.day_exercise_id, previous, ex.exercise_id);
+      const prev = findPreviousExercise(ex.day_exercise_id, previous, ex.exercise_id, ex.is_warmup);
       const prevStr = buildPrevString(prev, !!ex.is_duration);
       const prevNote = prev && prev.note ? prev.note : '';
       const prevFrom = prev && prev.from_template ? ` (from ${prev.from_template})` : '';
@@ -208,11 +208,15 @@ function renderExercisesPreview(container, exercises, previous) {
   }
 }
 
-function findPreviousExercise(dayExerciseId, previous, exerciseId) {
+function findPreviousExercise(dayExerciseId, previous, exerciseId, isWarmup) {
   if (!previous) return null;
   let prev = previous.find((e) => e.day_exercise_id === dayExerciseId);
   if (!prev && exerciseId != null) {
-    prev = previous.find((e) => e.exercise_id === exerciseId);
+    // Fallback: match by exercise_id, but respect warmup role so a warmup slot
+    // never picks up working-set history (and vice versa).
+    prev = previous.find(
+      (e) => e.exercise_id === exerciseId && (isWarmup == null || e.is_warmup == null || e.is_warmup === isWarmup),
+    );
   }
   return prev || null;
 }
@@ -276,7 +280,7 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
   }
 
   const isDuration = !!ex.is_duration;
-  const prev = findPreviousExercise(ex.day_exercise_id, previous, ex.exercise_id);
+  const prev = findPreviousExercise(ex.day_exercise_id, previous, ex.exercise_id, ex.is_warmup);
   const prevStr = buildPrevString(prev, isDuration);
   const prevNote = prev && prev.note ? prev.note : '';
   const prevFrom = prev && prev.from_template ? ` (from ${prev.from_template})` : '';

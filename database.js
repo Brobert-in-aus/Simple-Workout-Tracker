@@ -725,10 +725,13 @@ function initWorkoutFromTemplate(date, templateId) {
 
   const templateExercises = getDayExercises(templateId);
 
-  // Get previous session's data for pre-fill (cross-template: use most recent for each exercise)
+  // Get previous session's data for pre-fill.
+  // Warmup/working scoping prevents cross-role bleed. For targets_independent slots,
+  // also scope to same template so differently-programmed exercises don't share history.
   let prevDataMap = {};
   for (const te of templateExercises) {
-    const recent = getMostRecentExerciseData(te.exercise_id, date);
+    const scopedDayId = te.targets_independent ? templateId : null;
+    const recent = getMostRecentExerciseData(te.exercise_id, date, te.is_warmup, scopedDayId);
     if (recent && recent.sets && recent.sets.length > 0) {
       prevDataMap[te.id] = recent.sets;
     }
@@ -968,10 +971,15 @@ function getLinkedInfoForTemplate(templateId) {
   return result;
 }
 
-function getMostRecentExerciseData(exerciseId, beforeDate, isWarmup) {
-  // Match by role (warmup↔warmup, main↔main) so prev data is relevant
+function getMostRecentExerciseData(exerciseId, beforeDate, isWarmup, dayId) {
+  // Match by role (warmup↔warmup, main↔main) so prev data is relevant.
+  // dayId: when provided, restricts to sessions from that template only (used for
+  // targets_independent slots so cross-template history doesn't bleed in).
   const warmupFilter = isWarmup != null ? 'AND de.is_warmup = ?' : '';
-  const params = isWarmup != null ? [exerciseId, beforeDate, isWarmup] : [exerciseId, beforeDate];
+  const dayFilter = dayId != null ? 'AND w.day_id = ?' : '';
+  const params = [exerciseId, beforeDate];
+  if (isWarmup != null) params.push(isWarmup);
+  if (dayId != null) params.push(dayId);
   const row = db.prepare(`
     SELECT we.id as we_id, w.date, w.day_id, d.name as template_name,
            we.day_exercise_id, we.skipped, we.note, de.exercise_id
@@ -979,7 +987,7 @@ function getMostRecentExerciseData(exerciseId, beforeDate, isWarmup) {
     JOIN day_exercises de ON de.id = we.day_exercise_id
     JOIN workouts w ON w.id = we.workout_id
     JOIN days d ON d.id = w.day_id
-    WHERE de.exercise_id = ? AND w.date < ? AND we.skipped = 0 ${warmupFilter}
+    WHERE de.exercise_id = ? AND w.date < ? AND we.skipped = 0 ${warmupFilter} ${dayFilter}
     ORDER BY w.date DESC
     LIMIT 1
   `).get(...params);
