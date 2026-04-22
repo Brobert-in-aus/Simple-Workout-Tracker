@@ -463,12 +463,8 @@ function runHealthImport(options = {}, importSources = null) {
   const importFileTxn = database.transaction(fileResult => {
     for (const metricRow of fileResult.dailyMetrics) {
       const existingMetric = db.getHealthDailyMetricsByDate(metricRow.date);
-      if (
-        existingMetric &&
-        existingMetric.source_snapshot_date === metricRow.sourceSnapshotDate &&
-        hasSameDailyMetricData(existingMetric, metricRow)
-      ) {
-        continue;
+      if (existingMetric && hasSameDailyMetricData(existingMetric, metricRow)) {
+        continue; // data unchanged — skip regardless of snapshot date
       }
       const metricResult = db.upsertHealthDailyMetrics(metricRow);
       if (metricResult.applied) {
@@ -492,10 +488,9 @@ function runHealthImport(options = {}, importSources = null) {
       const existingWorkout = db.getExternalWorkoutByExternalId(normalizedWorkout.externalId);
       if (
         existingWorkout &&
-        existingWorkout.source_snapshot_date === normalizedWorkout.sourceSnapshotDate &&
         hasSameExternalWorkoutData(normalizedWorkout.externalId, normalizedWorkout, settings.level, matchStatus, links)
       ) {
-        continue;
+        continue; // data unchanged — skip regardless of snapshot date
       }
       const workoutResult = db.upsertExternalWorkout(normalizedWorkout, settings.level);
       if (!workoutResult.applied) {
@@ -600,13 +595,9 @@ function runHealthImport(options = {}, importSources = null) {
         if (!existingWorkout) {
           summary.external_workouts_inserted += 1;
           appliedWorkoutDates.add(normalizedWorkout.date);
-        } else if (
-          (!existingWorkout.source_snapshot_date || !normalizedWorkout.sourceSnapshotDate || normalizedWorkout.sourceSnapshotDate > existingWorkout.source_snapshot_date) ||
-          (
-            normalizedWorkout.sourceSnapshotDate === existingWorkout.source_snapshot_date &&
-            !hasSameExternalWorkoutData(normalizedWorkout.externalId, normalizedWorkout, settings.level, matchStatus, links)
-          )
-        ) {
+        } else if (hasSameExternalWorkoutData(normalizedWorkout.externalId, normalizedWorkout, settings.level, matchStatus, links)) {
+          // data unchanged — skip regardless of snapshot date (no counter)
+        } else if (!existingWorkout.source_snapshot_date || !normalizedWorkout.sourceSnapshotDate || normalizedWorkout.sourceSnapshotDate >= existingWorkout.source_snapshot_date) {
           summary.external_workouts_updated += 1;
           appliedWorkoutDates.add(normalizedWorkout.date);
         } else {
@@ -618,13 +609,9 @@ function runHealthImport(options = {}, importSources = null) {
         if (!existingMetric) {
           summary.health_daily_metrics_inserted += 1;
           appliedMetricDates.add(metricRow.date);
-        } else if (
-          (!existingMetric.source_snapshot_date || !metricRow.sourceSnapshotDate || metricRow.sourceSnapshotDate > existingMetric.source_snapshot_date) ||
-          (
-            metricRow.sourceSnapshotDate === existingMetric.source_snapshot_date &&
-            !hasSameDailyMetricData(existingMetric, metricRow)
-          )
-        ) {
+        } else if (hasSameDailyMetricData(existingMetric, metricRow)) {
+          // data unchanged — skip regardless of snapshot date (no counter)
+        } else if (!existingMetric.source_snapshot_date || !metricRow.sourceSnapshotDate || metricRow.sourceSnapshotDate >= existingMetric.source_snapshot_date) {
           summary.health_daily_metrics_updated += 1;
           appliedMetricDates.add(metricRow.date);
         } else {
