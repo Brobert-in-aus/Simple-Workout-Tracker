@@ -218,16 +218,26 @@ timeout /t 1 /nobreak >nul
 goto wait_for_exit
 
 :: --- Subroutine: write current package.json MD5 to data\.pkg_hash ---
+:: Captures hash into a variable first (same pattern as :update), then writes
+:: outside the for loop — avoids echo-inside-loop redirect edge cases.
 :save_pkg_hash
-for /f "tokens=*" %%h in ('certutil -hashfile package.json MD5 2^>nul ^| findstr /v "hash MD5"') do echo %%h>"data\.pkg_hash"
+set "PKG_HASH_WRITE="
+for /f "tokens=*" %%h in ('certutil -hashfile package.json MD5 2^>nul ^| findstr /v "hash MD5"') do set "PKG_HASH_WRITE=%%h"
+if defined PKG_HASH_WRITE echo %PKG_HASH_WRITE%>"data\.pkg_hash"
 goto :eof
 
 :: --- Subroutine: reinstall deps if package.json changed since last install ---
+:: If the hash file doesn't exist yet (first run after feature deploy) just save
+:: the current hash silently — don't treat a missing file as a changed package.
 :check_pkg
+if not exist "data\.pkg_hash" (
+    call :save_pkg_hash
+    goto :eof
+)
 set "PKG_HASH_NOW="
 set "PKG_HASH_STORED="
 for /f "tokens=*" %%h in ('certutil -hashfile package.json MD5 2^>nul ^| findstr /v "hash MD5"') do set "PKG_HASH_NOW=%%h"
-if exist "data\.pkg_hash" set /p PKG_HASH_STORED=<"data\.pkg_hash"
+set /p PKG_HASH_STORED=<"data\.pkg_hash"
 if not "%PKG_HASH_NOW%"=="%PKG_HASH_STORED%" (
     call :log "package.json changed - reinstalling dependencies..."
     echo  Reinstalling dependencies...
