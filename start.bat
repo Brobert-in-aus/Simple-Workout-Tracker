@@ -49,6 +49,7 @@ if not exist "node_modules\express" (
     echo  Dependencies not found. Installing...
     echo.
     call "%NPM%" install --production
+    call :save_pkg_hash
     echo.
 )
 
@@ -62,6 +63,9 @@ echo ============================================
 echo.
 echo  Starting server...
 echo.
+
+:: Check if package.json changed since last install (catches frontend-triggered pulls)
+call :check_pkg
 
 :: Start server in background, pipe output to temp file
 set "LOGFILE=%TEMP%\workout-tracker-log.txt"
@@ -173,6 +177,7 @@ if not "%PKG_HASH_BEFORE%"=="%PKG_HASH_AFTER%" (
     type "%TEMP%\wt-npm.tmp"
     type "%TEMP%\wt-npm.tmp" >> "%LOG%"
     del "%TEMP%\wt-npm.tmp" >nul 2>&1
+    call :save_pkg_hash
 )
 call :log "=== UPDATE COMPLETE ==="
 timeout /t 1 /nobreak >nul
@@ -211,6 +216,25 @@ if %WAIT_TICKS% GEQ 10 (
 )
 timeout /t 1 /nobreak >nul
 goto wait_for_exit
+
+:: --- Subroutine: write current package.json MD5 to data\.pkg_hash ---
+:save_pkg_hash
+for /f "tokens=*" %%h in ('certutil -hashfile package.json MD5 2^>nul ^| findstr /v "hash MD5"') do echo %%h>"data\.pkg_hash"
+goto :eof
+
+:: --- Subroutine: reinstall deps if package.json changed since last install ---
+:check_pkg
+set "PKG_HASH_NOW="
+set "PKG_HASH_STORED="
+for /f "tokens=*" %%h in ('certutil -hashfile package.json MD5 2^>nul ^| findstr /v "hash MD5"') do set "PKG_HASH_NOW=%%h"
+if exist "data\.pkg_hash" set /p PKG_HASH_STORED=<"data\.pkg_hash"
+if not "%PKG_HASH_NOW%"=="%PKG_HASH_STORED%" (
+    call :log "package.json changed - reinstalling dependencies..."
+    echo  Reinstalling dependencies...
+    call "%NPM%" install --production
+    call :save_pkg_hash
+)
+goto :eof
 
 :: --- Subroutine: append timestamped message to log ---
 :log

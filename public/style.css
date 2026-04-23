@@ -2045,6 +2045,50 @@ html, body {
   line-height: 1.4;
 }
 
+.update-msg {
+  font-size: 13px;
+  color: var(--text-dim);
+  min-height: 18px;
+  margin-bottom: 6px;
+}
+
+.update-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.restart-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.restart-box {
+  background: var(--bg-card);
+  border-radius: 16px;
+  padding: 32px 24px;
+  max-width: 300px;
+  text-align: center;
+}
+
+.restart-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+
+.restart-msg {
+  font-size: 14px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
 .chart-modal-view .progress-chart-svg {
   width: 100%;
 }

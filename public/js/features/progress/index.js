@@ -660,6 +660,14 @@ async function renderWorkoutsSection(container) {
       <div class="progress-info-value">${backupLabel}</div>
       <div class="progress-helper-text">${backupMeta}</div>
     </div>
+    <div class="progress-chart-card progress-info-card js-update-card">
+      <div class="progress-chart-title">App update</div>
+      <div class="update-msg"></div>
+      <div class="update-actions">
+        <button class="btn btn-sm btn-outline js-check-update-btn">Check for updates</button>
+        <button class="btn btn-sm js-apply-update-btn hidden">Pull &amp; Restart</button>
+      </div>
+    </div>
   `;
 
   const freqSvg = container.querySelector('.js-freq-chart .progress-chart-svg');
@@ -694,6 +702,80 @@ async function renderWorkoutsSection(container) {
   }
 
   wireExpandableCharts(container);
+  wireUpdateCard(container);
+}
+
+function wireUpdateCard(container) {
+  const card = container.querySelector('.js-update-card');
+  const msg = card.querySelector('.update-msg');
+  const checkBtn = card.querySelector('.js-check-update-btn');
+  const applyBtn = card.querySelector('.js-apply-update-btn');
+
+  checkBtn.addEventListener('click', async () => {
+    checkBtn.disabled = true;
+    checkBtn.textContent = 'Checking...';
+    msg.textContent = '';
+    applyBtn.classList.add('hidden');
+    try {
+      const result = await api('/api/update/check');
+      checkBtn.disabled = false;
+      if (result.upToDate) {
+        msg.textContent = 'Already up to date.';
+        checkBtn.textContent = 'Check for updates';
+      } else {
+        const n = result.commitsBehind;
+        msg.textContent = `${n} commit${n === 1 ? '' : 's'} available${result.latestMessage ? ` — "${result.latestMessage}"` : ''}`;
+        checkBtn.textContent = 'Re-check';
+        applyBtn.classList.remove('hidden');
+      }
+    } catch (err) {
+      msg.textContent = err.message;
+      checkBtn.textContent = 'Check for updates';
+      checkBtn.disabled = false;
+    }
+  });
+
+  applyBtn.addEventListener('click', async () => {
+    if (!confirm('Pull latest changes and restart the server?')) return;
+    applyBtn.disabled = true;
+    applyBtn.textContent = 'Pulling...';
+    try {
+      await api('/api/update/apply', { method: 'POST' });
+      showRestartingOverlay();
+    } catch (err) {
+      msg.textContent = err.message;
+      applyBtn.disabled = false;
+      applyBtn.textContent = 'Pull & Restart';
+    }
+  });
+}
+
+function showRestartingOverlay() {
+  const overlay = document.createElement('div');
+  overlay.className = 'restart-overlay';
+  overlay.innerHTML = `
+    <div class="restart-box">
+      <div class="restart-title">Restarting\u2026</div>
+      <div class="restart-msg">Pulling updates and restarting. This page will reload automatically.</div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  let attempts = 0;
+  const poll = setInterval(async () => {
+    attempts++;
+    try {
+      await fetch('/api/backup/status');
+      clearInterval(poll);
+      window.location.reload();
+    } catch (_) {
+      if (attempts >= 30) {
+        clearInterval(poll);
+        overlay.querySelector('.restart-msg').textContent =
+          'Server not responding after 60 seconds. Please refresh the page manually.';
+      }
+    }
+  }, 2000);
 }
 
 function renderWeekDetail(container, weekStart, sessions) {

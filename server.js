@@ -1,8 +1,12 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const { exec } = require('child_process');
+const { promisify } = require('util');
 const db = require('./database');
 const { runHealthImport, normalizeImportSource, validateImportSourceRoot } = require('./import-health');
+
+const execAsync = promisify(exec);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -854,6 +858,50 @@ app.put('/api/nutrition/targets', (req, res) => {
   if (rest) db.setUserSetting('macro_targets_rest', JSON.stringify(normalizeMacroTargetProfile(rest)));
   if (apple_health_adjustments) db.setAppleHealthEnergyAdjustments(apple_health_adjustments);
   res.json({ ok: true });
+});
+
+// --- Update endpoints ---
+
+app.get('/api/update/check', async (req, res) => {
+  try {
+    await execAsync('git fetch', { cwd: __dirname, timeout: 15000 });
+  } catch (err) {
+    return res.status(503).json({ error: `Could not reach remote: ${(err.stderr || err.message).trim()}` });
+  }
+  try {
+    const [{ stdout: headOut }, { stdout: upstreamOut }] = await Promise.all([
+      execAsync('git rev-parse HEAD', { cwd: __dirname }),
+      execAsync('git rev-parse @{u}', { cwd: __dirname }),
+    ]);
+    const head = headOut.trim();
+    const upstream = upstreamOut.trim();
+    if (head === upstream) {
+      return res.json({ upToDate: true, commitsBehind: 0, latestMessage: null });
+    }
+    const { stdout: countOut } = await execAsync('git rev-list HEAD..@{u} --count', { cwd: __dirname });
+    const { stdout: msgOut } = await execAsync('git log @{u} -1 --pretty=format:%s', { cwd: __dirname });
+    res.json({
+      upToDate: false,
+      commitsBehind: parseInt(countOut.trim(), 10) || 0,
+      latestMessage: msgOut.trim() || null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: (err.stderr || err.message).trim() });
+  }
+});
+
+app.post('/api/update/apply', async (req, res) => {
+  try {
+    const { stdout: statusOut } = await execAsync('git status --porcelain', { cwd: __dirname });
+    if (statusOut.trim()) {
+      return res.status(409).json({ error: 'Working tree has uncommitted changes — pull aborted.' });
+    }
+    await execAsync('git pull', { cwd: __dirname, timeout: 30000 });
+    res.json({ ok: true });
+    setTimeout(shutdown, 200);
+  } catch (err) {
+    res.status(500).json({ error: (err.stderr || err.message).trim() || 'Pull failed' });
+  }
 });
 
 // --- Graceful shutdown ---
