@@ -1,5 +1,6 @@
 import { api } from '../core/api.js';
 import { formatDate, todayStr } from '../core/dates.js';
+import { escapeAttr, escapeHtml } from '../core/html.js';
 import { showToast, openAppModal } from '../core/ui.js';
 import { buildLineChart, wireExpandableCharts } from './progress/charts.js';
 
@@ -380,6 +381,7 @@ function getSlotDefaults(template) {
 
 function mealCardHTML(template, log, isCustom) {
   const name = log ? log.meal_name : template.name;
+  const safeName = escapeHtml(name);
   const logged = log != null;
   // use_defaults only applies to non-custom template slots
   const useDefaults = !isCustom && !!(template?.use_defaults);
@@ -417,7 +419,7 @@ function mealCardHTML(template, log, isCustom) {
          data-is-custom="${isCustom ? '1' : '0'}"
          data-use-defaults="${useDefaults ? '1' : '0'}">
       <div class="meal-card-header">
-        <span class="meal-name">${name}</span>
+        <span class="meal-name">${safeName}</span>
         <span class="meal-summary">${summaryContent}</span>
         ${confirmBtn}
         <button class="meal-delete-btn" title="Remove">&times;</button>
@@ -1145,7 +1147,7 @@ function templateRowHTML(t) {
   return `
     <div class="template-row" data-id="${t.id}">
       <div class="template-row-top">
-        <input class="tmpl-name" type="text" value="${t.name}" placeholder="Meal name">
+        <input class="tmpl-name" type="text" value="${escapeAttr(t.name)}" placeholder="Meal name">
         <label class="tmpl-rest-toggle">
           <input type="checkbox" class="tmpl-rest-check" ${t.include_rest_day ? 'checked' : ''}> Rest day
         </label>

@@ -189,7 +189,9 @@ function initSchema() {
       updated_at TEXT NOT NULL
     );
   `);
+  db.exec("CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)");
   db.exec('CREATE INDEX IF NOT EXISTS idx_macro_logs_date ON macro_logs(date)');
+  runMacroLogTemplateDateUniqueMigration();
   db.exec('CREATE INDEX IF NOT EXISTS idx_external_workouts_date_type ON external_workouts(date, workout_type)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_external_workouts_match_status ON external_workouts(match_status)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_health_daily_metrics_updated_at ON health_daily_metrics(updated_at)');
@@ -297,7 +299,6 @@ function initSchema() {
   // Migration: sync linked exercises (same exercise_id across different templates)
   // Pick the highest-id day_exercise as canonical and sync to others in DIFFERENT templates
   // Same-template duplicates are intentionally distinct (e.g. warmup + main sets)
-  db.exec("CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)");
   const migrated = db.prepare("SELECT 1 FROM _migrations WHERE name = 'sync_linked_exercises'").get();
   if (!migrated) {
     const groups = db.prepare(`
@@ -338,6 +339,39 @@ function initSchema() {
   } catch (e) {
     db.exec("ALTER TABLE health_daily_metrics ADD COLUMN source_snapshot_date TEXT");
   }
+}
+
+function runMigrationOnce(name, fn) {
+  const migrated = db.prepare('SELECT 1 FROM _migrations WHERE name = ?').get(name);
+  if (migrated) return;
+  const txn = db.transaction(() => {
+    fn();
+    db.prepare('INSERT INTO _migrations (name) VALUES (?)').run(name);
+  });
+  txn();
+}
+
+function runMacroLogTemplateDateUniqueMigration() {
+  runMigrationOnce('macro_logs_template_date_unique', () => {
+    const result = db.prepare(`
+      DELETE FROM macro_logs
+      WHERE meal_template_id IS NOT NULL
+        AND id NOT IN (
+          SELECT MAX(id)
+          FROM macro_logs
+          WHERE meal_template_id IS NOT NULL
+          GROUP BY date, meal_template_id
+        )
+    `).run();
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_macro_logs_template_date_unique
+      ON macro_logs(date, meal_template_id)
+      WHERE meal_template_id IS NOT NULL
+    `);
+    if (result.changes > 0) {
+      console.log(`Migration macro_logs_template_date_unique removed ${result.changes} duplicate macro log row(s).`);
+    }
+  });
 }
 
 // --- Exercise helpers ---
@@ -1236,6 +1270,23 @@ function createMacroLog({ date, meal_template_id = null, meal_name, sort_order =
   return info.lastInsertRowid;
 }
 
+function upsertMacroLogForTemplateDate({ date, meal_template_id, meal_name, sort_order = 0, calories_kcal = 0, protein_g = 0, carbs_g = 0, fat_g = 0 }) {
+  const row = db.prepare(`
+    INSERT INTO macro_logs (date, meal_template_id, meal_name, sort_order, calories_kcal, protein_g, carbs_g, fat_g)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(date, meal_template_id) WHERE meal_template_id IS NOT NULL
+    DO UPDATE SET
+      meal_name = excluded.meal_name,
+      sort_order = excluded.sort_order,
+      calories_kcal = excluded.calories_kcal,
+      protein_g = excluded.protein_g,
+      carbs_g = excluded.carbs_g,
+      fat_g = excluded.fat_g
+    RETURNING id
+  `).get(date, meal_template_id, meal_name, sort_order, calories_kcal, protein_g, carbs_g, fat_g);
+  return row.id;
+}
+
 function updateMacroLog(id, fields) {
   const allowed = ['calories_kcal', 'protein_g', 'carbs_g', 'fat_g', 'meal_name', 'sort_order'];
   const updates = [], values = [];
@@ -1926,6 +1977,7 @@ module.exports = {
   getMacroLogsForDate,
   getMacroLogByTemplateAndDate,
   createMacroLog,
+  upsertMacroLogForTemplateDate,
   updateMacroLog,
   deleteMacroLog,
   // Apple Health / external workouts

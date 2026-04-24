@@ -10,12 +10,10 @@ const execAsync = promisify(exec);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+let backupTimer = null;
 
 app.use(express.json({ limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
-
-// Initialize database on startup
-db.getDb();
 
 // Weekly backup: run at startup and re-check every 6 hours so a long-running server
 // still creates a new snapshot when a new ISO week begins. The helper is idempotent
@@ -27,8 +25,6 @@ function runWeeklyBackup() {
     })
     .catch(err => console.error('Weekly backup failed:', err));
 }
-runWeeklyBackup();
-setInterval(runWeeklyBackup, 6 * 60 * 60 * 1000);
 
 // --- Helper ---
 function todayISO() {
@@ -457,7 +453,8 @@ app.post('/api/workout/:date/begin', (req, res) => {
   const dayExercises = db.getDayExercises(template_id);
   const prevData = [];
   for (const te of dayExercises) {
-    const recent = db.getMostRecentExerciseData(te.exercise_id, date, te.is_warmup);
+    const scopedDayId = te.targets_independent ? template_id : null;
+    const recent = db.getMostRecentExerciseData(te.exercise_id, date, te.is_warmup, scopedDayId);
     if (recent) {
       prevData.push({
         day_exercise_id: te.id,
@@ -799,15 +796,15 @@ app.post('/api/nutrition/logs', (req, res) => {
     fat_g:         parseFloat(fat_g)         || 0,
   };
 
-  // Upsert for template-based logs: if an entry already exists for this
-  // template+date (e.g. from a rapid double-tap), return its id and update
-  // the values rather than creating a duplicate row.
   if (meal_template_id != null) {
-    const existing = db.getMacroLogByTemplateAndDate(parseInt(meal_template_id), date);
-    if (existing) {
-      db.updateMacroLog(existing.id, macros);
-      return res.json({ id: existing.id });
-    }
+    const id = db.upsertMacroLogForTemplateDate({
+      date,
+      meal_template_id: parseInt(meal_template_id),
+      meal_name,
+      sort_order: parseInt(sort_order) || 0,
+      ...macros,
+    });
+    return res.json({ id });
   }
 
   const id = db.createMacroLog({
@@ -910,10 +907,13 @@ app.post('/api/update/apply', async (req, res) => {
 // SIGINT (Ctrl+C in console). taskkill without /f cannot deliver signals to a
 // detached Windows process, so we use the HTTP endpoint as the primary mechanism.
 function shutdown() {
+  if (backupTimer) {
+    clearInterval(backupTimer);
+    backupTimer = null;
+  }
   db.closeDb();
   process.exit(0);
 }
-process.on('SIGINT', shutdown);
 
 // Shutdown endpoint — only accepts requests from localhost.
 // start.bat calls this via a node one-liner so the process exits cleanly,
@@ -929,15 +929,37 @@ app.post('/api/shutdown', (req, res) => {
 
 // --- Start ---
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Workout Tracker running at http://0.0.0.0:${PORT} (graceful shutdown enabled)`);
+function startServer(port = PORT, host = '0.0.0.0') {
+  db.getDb();
+  runWeeklyBackup();
+  if (!backupTimer) backupTimer = setInterval(runWeeklyBackup, 6 * 60 * 60 * 1000);
+
+  const server = app.listen(port, host, () => {
+    console.log(`Workout Tracker running at http://${host}:${port} (graceful shutdown enabled)`);
+    logLanUrls(port);
+  });
+  return server;
+}
+
+function logLanUrls(port = PORT) {
   const os = require('os');
   const nets = os.networkInterfaces();
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
       if (net.family === 'IPv4' && !net.internal) {
-        console.log(`  LAN: http://${net.address}:${PORT}`);
+        console.log(`  LAN: http://${net.address}:${port}`);
       }
     }
   }
-});
+}
+
+if (require.main === module) {
+  process.on('SIGINT', shutdown);
+  startServer();
+}
+
+module.exports = {
+  app,
+  startServer,
+  shutdown,
+};

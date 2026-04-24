@@ -1,5 +1,6 @@
 import { api } from '../../core/api.js';
 import { formatDate, formatDateShort, groupByWeek, shiftDate, toISO, todayStr } from '../../core/dates.js';
+import { escapeAttr, escapeHtml } from '../../core/html.js';
 import { state, invalidateBodyCache, invalidateProgressCaches } from '../../core/state.js';
 import { getStrengthFavoriteIds, toggleStrengthFavorite } from '../../core/storage.js';
 import { attachFirstTapCursorEnd, openAppModal, showToast } from '../../core/ui.js';
@@ -483,9 +484,9 @@ async function renderStrengthSection(container) {
     }
 
     favoritesRow.innerHTML = favorites.map((e) => `
-      <button type="button" class="favorite-chip" data-id="${e.id}" data-name="${e.name}">
+      <button type="button" class="favorite-chip" data-id="${e.id}" data-name="${escapeAttr(e.name)}">
         <span class="favorite-chip-star">&#9733;</span>
-        <span class="favorite-chip-name">${e.name}</span>
+        <span class="favorite-chip-name">${escapeHtml(e.name)}</span>
       </button>
     `).join('');
     favoritesRow.classList.remove('hidden');
@@ -512,8 +513,8 @@ async function renderStrengthSection(container) {
     }
 
     searchResults.innerHTML = matches.map((e) =>
-      `<div class="exercise-result-item" data-id="${e.id}" data-name="${e.name}">
-        <span class="result-name">${e.name}</span>
+      `<div class="exercise-result-item" data-id="${e.id}" data-name="${escapeAttr(e.name)}">
+        <span class="result-name">${escapeHtml(e.name)}</span>
         ${e.last_date ? `<span class="result-last-date">${formatDateShort(e.last_date)}</span>` : ''}
         <button type="button" class="result-favorite-btn${favoriteIds.has(e.id) ? ' active' : ''}" data-id="${e.id}" aria-label="Toggle favorite">&#9733;</button>
       </div>`

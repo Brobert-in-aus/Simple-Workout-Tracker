@@ -261,10 +261,17 @@ function renderExercises(container, workout, previous) {
 
   for (const group of groups) {
     const isSuperset = group.length > 1;
-    group.forEach((ex, idx) => {
+    const cardPairs = group.map((ex, idx) => {
       const card = createExerciseCard(ex, workout, previous, isSuperset, idx, group.length);
       container.appendChild(card);
+      return { card, ex };
     });
+    // Link superset siblings so set completion propagates across the group
+    if (isSuperset) {
+      cardPairs.forEach(({ card }, i) => {
+        card._supersetSiblings = cardPairs.filter((_, j) => j !== i);
+      });
+    }
   }
 }
 
@@ -424,6 +431,25 @@ function wireExerciseCard(card, ex, workout) {
         row.classList.add('set-done');
       }
       debounceSave(ex);
+      // Propagate completion state to same set number across superset group
+      const setNum = btn.dataset.set;
+      const newDone = !isDone;
+      (card._supersetSiblings || []).forEach(({ card: sibCard, ex: sibEx }) => {
+        const sibBtn = sibCard.querySelector(`.set-check[data-set="${setNum}"]`);
+        if (!sibBtn) return;
+        const sibRow = sibBtn.closest('.set-row');
+        if (sibBtn.classList.contains('done') === newDone) return;
+        if (newDone) {
+          sibBtn.classList.add('done');
+          sibBtn.innerHTML = '&#x2713;';
+          sibRow.classList.add('set-done');
+        } else {
+          sibBtn.classList.remove('done');
+          sibBtn.innerHTML = '';
+          sibRow.classList.remove('set-done');
+        }
+        debounceSave(sibEx);
+      });
     });
   });
 
@@ -736,6 +762,25 @@ function addSet(ex, card) {
       row.classList.add('set-done');
     }
     debounceSave(ex);
+    // Propagate to superset siblings
+    const setNum = this.dataset.set;
+    const newDone = !isDone;
+    (card._supersetSiblings || []).forEach(({ card: sibCard, ex: sibEx }) => {
+      const sibBtn = sibCard.querySelector(`.set-check[data-set="${setNum}"]`);
+      if (!sibBtn) return;
+      const sibRow = sibBtn.closest('.set-row');
+      if (sibBtn.classList.contains('done') === newDone) return;
+      if (newDone) {
+        sibBtn.classList.add('done');
+        sibBtn.innerHTML = '&#x2713;';
+        sibRow.classList.add('set-done');
+      } else {
+        sibBtn.classList.remove('done');
+        sibBtn.innerHTML = '';
+        sibRow.classList.remove('set-done');
+      }
+      debounceSave(sibEx);
+    });
   });
 
   const amrapBtn = row.querySelector('.amrap-toggle');
@@ -772,7 +817,7 @@ function removeSet(ex, card) {
   debounceSave(ex);
 }
 
-function markAllSetsDone(card, ex) {
+function markAllSetsDone(card, ex, propagate = true) {
   let changed = false;
   card.querySelectorAll('.set-row').forEach((row) => {
     const btn = row.querySelector('.set-check');
@@ -782,9 +827,12 @@ function markAllSetsDone(card, ex) {
     row.classList.add('set-done');
     changed = true;
   });
-  if (changed) {
-    showToast('Marked all sets done');
-    debounceSave(ex);
+  if (changed) debounceSave(ex);
+  if (propagate) {
+    (card._supersetSiblings || []).forEach(({ card: sibCard, ex: sibEx }) => {
+      markAllSetsDone(sibCard, sibEx, false);
+    });
+    if (changed) showToast('Marked all sets done');
   }
 }
 

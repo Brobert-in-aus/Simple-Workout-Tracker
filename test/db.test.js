@@ -531,6 +531,57 @@ test('nutrition summary range aggregates macro logs, targets, and fallback healt
   assert.equal(day22.energy_balance_kcal, null);
 });
 
+test('template macro logs upsert by date and template without duplicating rows', () => {
+  const sqlite = db.getDb();
+  sqlite.prepare('DELETE FROM macro_logs').run();
+  sqlite.prepare('DELETE FROM meal_templates').run();
+
+  const mealTemplateId = db.createMealTemplate({
+    name: 'Upsert Lunch',
+    calories_kcal: 500,
+    protein_g: 40,
+  });
+
+  const firstId = db.upsertMacroLogForTemplateDate({
+    date: '2026-04-23',
+    meal_template_id: mealTemplateId,
+    meal_name: 'Upsert Lunch',
+    sort_order: 1,
+    calories_kcal: 500,
+    protein_g: 40,
+  });
+  const secondId = db.upsertMacroLogForTemplateDate({
+    date: '2026-04-23',
+    meal_template_id: mealTemplateId,
+    meal_name: 'Upsert Lunch Updated',
+    sort_order: 2,
+    calories_kcal: 650,
+    protein_g: 55,
+  });
+
+  assert.equal(secondId, firstId);
+  const rows = db.getMacroLogsForDate('2026-04-23');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].meal_name, 'Upsert Lunch Updated');
+  assert.equal(rows[0].sort_order, 2);
+  assert.equal(rows[0].calories_kcal, 650);
+  assert.equal(rows[0].protein_g, 55);
+
+  db.createMacroLog({
+    date: '2026-04-23',
+    meal_template_id: null,
+    meal_name: 'Custom A',
+    sort_order: 999,
+  });
+  db.createMacroLog({
+    date: '2026-04-23',
+    meal_template_id: null,
+    meal_name: 'Custom B',
+    sort_order: 999,
+  });
+  assert.equal(db.getMacroLogsForDate('2026-04-23').length, 3);
+});
+
 test('merged history includes standalone external workouts', () => {
   const { templateId } = buildTemplate('Smoke-History-Tracked', [
     { name: 'Smoke History Lift', targetSets: 3, targetReps: '8' },
