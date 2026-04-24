@@ -227,11 +227,11 @@ function buildPrevString(prev, isDuration) {
     return `Previous: ${prev.sets.map((s) => s.duration_seconds != null ? `${s.duration_seconds}s` : '?').join(', ')}`;
   }
   return `Previous: ${prev.sets.map((s) => {
-    if (s.weight == null) return 'bw';
+    const weightStr = s.weight == null ? 'bw' : `${s.weight}kg`;
     const reps = s.reps != null ? s.reps : '?';
-    if (s.is_amrap) return `${s.weight}kg × ${reps}F`;
-    if (s.target_reps != null && s.reps != null && s.reps < s.target_reps) return `${s.weight}kg × ${s.reps}/${s.target_reps}`;
-    return `${s.weight}kg × ${reps}`;
+    if (s.is_amrap) return `${weightStr} × ${reps}F`;
+    if (s.target_reps != null && s.reps != null && s.reps < s.target_reps) return `${weightStr} × ${s.reps}/${s.target_reps}`;
+    return `${weightStr} × ${reps}`;
   }).join(', ')}`;
 }
 
