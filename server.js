@@ -904,8 +904,11 @@ app.get('/api/update/check', async (req, res) => {
 app.post('/api/update/apply', async (req, res) => {
   try {
     const { stdout: statusOut } = await execAsync('git status --porcelain', { cwd: __dirname });
-    if (statusOut.trim()) {
-      return res.status(409).json({ error: 'Working tree has uncommitted changes — pull aborted.' });
+    // Ignore untracked files (??) — they can't cause pull conflicts.
+    // Only block on tracked modifications (M, A, D, R, C, U …).
+    const dirtyLines = statusOut.split('\n').filter(l => l.trim() && !l.startsWith('??'));
+    if (dirtyLines.length > 0) {
+      return res.status(409).json({ error: `Working tree has uncommitted changes — pull aborted.\n${dirtyLines.join('\n')}` });
     }
     await execAsync('git pull', { cwd: __dirname, timeout: 30000 });
     res.json({ ok: true });
