@@ -273,6 +273,12 @@ function initSchema() {
     db.exec("ALTER TABLE day_exercises ADD COLUMN is_assisted INTEGER NOT NULL DEFAULT 0");
   }
 
+  // Data fix: is_assisted was incorrectly propagated to all exercises via syncLinkedExercises.
+  // Reset everything to 0 — no exercise was intentionally marked before the bug was fixed.
+  runMigrationOnce('reset_is_assisted_propagation_bug', () => {
+    db.prepare('UPDATE day_exercises SET is_assisted = 0').run();
+  });
+
   // Migration: add use_defaults flag to meal_templates (one-tap confirm vs manual entry)
   try {
     db.prepare("SELECT use_defaults FROM meal_templates LIMIT 1").get();

@@ -776,7 +776,8 @@ html, body {
 .tmpl-ss-toggle,
 .tmpl-gs-toggle,
 .tmpl-warmup-toggle,
-.tmpl-duration-toggle {
+.tmpl-duration-toggle,
+.tmpl-assisted-toggle {
   background: var(--bg-input);
   border: 1px solid var(--border);
   color: var(--text-dim);
@@ -808,6 +809,12 @@ html, body {
   background: var(--duration-text);
   border-color: var(--duration-text);
   color: white;
+}
+
+.tmpl-assisted-toggle.active {
+  background: var(--beige);
+  border-color: #a0724e;
+  color: #6b4226;
 }
 
 .tmpl-amrap-toggle,
