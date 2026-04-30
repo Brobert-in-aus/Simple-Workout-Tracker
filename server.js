@@ -188,14 +188,12 @@ app.get('/api/templates/:id/exercises', (req, res) => {
 });
 
 app.post('/api/templates/:id/exercises', (req, res) => {
-  const { name, target_sets, target_reps, notes, superset_group, is_warmup, is_duration, is_amrap, amrap_last_only } = req.body;
+  const templateId = parseInt(req.params.id);
+  const { name, target_sets, target_reps, notes, superset_group, is_warmup, is_duration, is_amrap, amrap_last_only, after_sort_order } = req.body;
   const exerciseId = db.getOrCreateExercise(name);
-  const existing = db.getDayExercises(parseInt(req.params.id));
-  const sortOrder = existing.length;
 
   // Check if this exercise exists in other templates — pre-fill from linked settings
   // Exclude same-template entries so same-template duplicates stay independent
-  const templateId = parseInt(req.params.id);
   const linked = db.getDb().prepare('SELECT * FROM day_exercises WHERE exercise_id = ? AND day_id != ? AND archived = 0 LIMIT 1').get(exerciseId, templateId);
   const sets = target_sets || (linked ? linked.target_sets : 3);
   const reps = target_reps || (linked ? linked.target_reps : '10');
@@ -204,8 +202,24 @@ app.post('/api/templates/:id/exercises', (req, res) => {
   const amrap = is_amrap || (linked ? !!linked.is_amrap : false);
   const amrapLast = amrap_last_only || (linked ? !!linked.amrap_last_only : false);
 
+  // Positional insert: shift exercises after the anchor, then insert at anchor+1.
+  // after_sort_order = -1 means "at the top"; null/undefined means append.
+  let sortOrder;
+  if (after_sort_order != null) {
+    const insertAfter = parseInt(after_sort_order);
+    if (insertAfter === -1) {
+      db.getDb().prepare('UPDATE day_exercises SET sort_order = sort_order + 1 WHERE day_id = ? AND archived = 0').run(templateId);
+      sortOrder = 0;
+    } else {
+      db.getDb().prepare('UPDATE day_exercises SET sort_order = sort_order + 1 WHERE day_id = ? AND sort_order > ? AND archived = 0').run(templateId, insertAfter);
+      sortOrder = insertAfter + 1;
+    }
+  } else {
+    sortOrder = db.getDayExercises(templateId).length;
+  }
+
   const id = db.addDayExercise(
-    parseInt(req.params.id), exerciseId,
+    templateId, exerciseId,
     sets, reps, sortOrder,
     notes || (linked ? linked.notes : null), superset_group || null, warmup, duration,
     amrap, amrapLast

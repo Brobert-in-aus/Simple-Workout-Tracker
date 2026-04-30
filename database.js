@@ -266,6 +266,13 @@ function initSchema() {
     db.exec("ALTER TABLE day_exercises ADD COLUMN targets_independent INTEGER NOT NULL DEFAULT 0");
   }
 
+  // Migration: add is_assisted flag to day_exercises (assistance machines — weight goes down as user gets stronger)
+  try {
+    db.prepare("SELECT is_assisted FROM day_exercises LIMIT 1").get();
+  } catch (e) {
+    db.exec("ALTER TABLE day_exercises ADD COLUMN is_assisted INTEGER NOT NULL DEFAULT 0");
+  }
+
   // Migration: add use_defaults flag to meal_templates (one-tap confirm vs manual entry)
   try {
     db.prepare("SELECT use_defaults FROM meal_templates LIMIT 1").get();
@@ -605,7 +612,7 @@ function getDayExercises(dayId, includeAdhoc = false) {
 }
 
 function updateDayExercise(id, fields) {
-  const allowed = ['target_sets', 'target_reps', 'sort_order', 'notes', 'superset_group', 'exercise_id', 'is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'targets_independent'];
+  const allowed = ['target_sets', 'target_reps', 'sort_order', 'notes', 'superset_group', 'exercise_id', 'is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'targets_independent', 'is_assisted'];
   const updates = [];
   const values = [];
   for (const [key, val] of Object.entries(fields)) {
@@ -692,7 +699,7 @@ function getWorkoutsForDate(date) {
 
 function getWorkoutFull(workoutId) {
   const exercises = db.prepare(`
-    SELECT we.*, de.exercise_id, de.target_sets, de.target_reps, de.superset_group, de.notes as default_note, de.is_warmup, de.is_duration, de.is_amrap, de.amrap_last_only,
+    SELECT we.*, de.exercise_id, de.target_sets, de.target_reps, de.superset_group, de.notes as default_note, de.is_warmup, de.is_duration, de.is_amrap, de.amrap_last_only, de.is_assisted,
            e.name as exercise_name,
            oe.name as override_exercise_name
     FROM workout_exercises we
@@ -853,9 +860,9 @@ function addExerciseToWorkout(workoutId, exerciseName, targetSets, targetReps, a
   const exerciseId = getOrCreateExercise(exerciseName);
   const isAdhoc = saveToTemplate ? 0 : 1;
 
-  // Determine sort_order for the new exercise (after the specified position)
-  const existing = db.prepare('SELECT id, sort_order FROM workout_exercises WHERE workout_id = ? ORDER BY sort_order').all(workoutId);
-  // afterSortOrder = null means "at the top" (insert before all); otherwise insert after that sort_order
+  // Capture existing workout exercises before any mutations so we can map workout
+  // position → template sort_order for positional insertion.
+  const existing = db.prepare('SELECT id, sort_order, day_exercise_id FROM workout_exercises WHERE workout_id = ? ORDER BY sort_order').all(workoutId);
   const insertSortOrder = afterSortOrder != null ? afterSortOrder + 1 : 0;
 
   const txn = db.transaction(() => {
@@ -863,9 +870,28 @@ function addExerciseToWorkout(workoutId, exerciseName, targetSets, targetReps, a
     db.prepare('UPDATE workout_exercises SET sort_order = sort_order + 1 WHERE workout_id = ? AND sort_order >= ?')
       .run(workoutId, insertSortOrder);
 
-    // Create day_exercise in the template
-    const templateMaxSort = db.prepare('SELECT MAX(sort_order) as mx FROM day_exercises WHERE day_id = ?').get(workout.day_id);
-    const deSortOrder = (templateMaxSort && templateMaxSort.mx != null) ? templateMaxSort.mx + 1 : 0;
+    // Determine template sort_order that mirrors the workout insertion position.
+    // Find the predecessor workout exercise and use its template sort_order as the anchor.
+    let deSortOrder;
+    if (afterSortOrder != null) {
+      const pred = existing.find(we => we.sort_order === afterSortOrder);
+      const predDe = pred
+        ? db.prepare('SELECT sort_order FROM day_exercises WHERE id = ?').get(pred.day_exercise_id)
+        : null;
+      if (predDe != null) {
+        db.prepare('UPDATE day_exercises SET sort_order = sort_order + 1 WHERE day_id = ? AND sort_order > ?')
+          .run(workout.day_id, predDe.sort_order);
+        deSortOrder = predDe.sort_order + 1;
+      } else {
+        const maxSort = db.prepare('SELECT MAX(sort_order) as mx FROM day_exercises WHERE day_id = ? AND archived = 0').get(workout.day_id);
+        deSortOrder = (maxSort && maxSort.mx != null) ? maxSort.mx + 1 : 0;
+      }
+    } else {
+      // "At the top" in the workout — shift all template slots and insert at 0
+      db.prepare('UPDATE day_exercises SET sort_order = sort_order + 1 WHERE day_id = ?').run(workout.day_id);
+      deSortOrder = 0;
+    }
+
     const deInfo = db.prepare(`
       INSERT INTO day_exercises (day_id, exercise_id, target_sets, target_reps, sort_order, is_adhoc)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -949,7 +975,7 @@ function syncLinkedExercises(dayExerciseId, fields) {
 
   // Propagate other fields (notes, workout-type flags) to all linked slots regardless
   // of independence state — these are always shared.
-  const otherSyncable = ['is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'notes'];
+  const otherSyncable = ['is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'notes', 'is_assisted'];
   const otherUpdates = [], otherValues = [];
   for (const [key, val] of Object.entries(fields)) {
     if (otherSyncable.includes(key)) {
@@ -1102,11 +1128,14 @@ function getPerformedExercises() {
 
 function getExerciseTrend(exerciseId) {
   // Returns [{date, total_volume, completion_pct}] sorted ASC, excluding warmup sets.
-  // total_volume = SUM(weight * reps) for completed sets that have both values.
-  // completion_pct = per-set avg where AMRAP=100%, others = min(reps/target,1)*100.
+  // For assisted exercises (is_assisted=1), volume = (bodyweight - assistance) * reps.
+  // Bodyweight is resolved as the nearest entry on or before the workout date; if none
+  // exists yet, the earliest entry is used so volume is never silently dropped.
   const rows = db.prepare(`
-    SELECT w.date,
-           ws.weight, ws.reps, ws.target_reps, ws.is_amrap, ws.completed
+    SELECT w.date, de.is_assisted,
+           ws.weight, ws.reps, ws.target_reps, ws.is_amrap, ws.completed,
+           (SELECT weight_kg FROM body_weights WHERE date <= w.date ORDER BY date DESC LIMIT 1) AS bw_before,
+           (SELECT weight_kg FROM body_weights ORDER BY date ASC LIMIT 1) AS bw_earliest
     FROM workout_exercises we
     JOIN workouts w ON w.id = we.workout_id
     JOIN day_exercises de ON de.id = we.day_exercise_id
@@ -1128,10 +1157,21 @@ function getExerciseTrend(exerciseId) {
     const completedSets = sets.filter(s => s.completed);
     if (completedSets.length === 0) continue;
 
-    // Volume: only sets with both weight and reps
+    // Volume calculation:
+    // - Assisted: (bodyweight - assistance) × reps. Bodyweight = bw_before ?? bw_earliest.
+    // - Regular:  weight × reps (skipped if weight is null, e.g. true bodyweight sets).
     const totalVolume = completedSets.reduce((sum, s) => {
-      if (s.weight == null || s.reps == null) return sum;
-      return sum + s.weight * s.reps;
+      if (s.reps == null) return sum;
+      let effectiveWeight;
+      if (s.is_assisted) {
+        const bw = s.bw_before != null ? s.bw_before : s.bw_earliest;
+        if (bw == null) return sum; // no bodyweight on file — omit rather than guess
+        effectiveWeight = Math.max(0, bw - (s.weight || 0));
+      } else {
+        if (s.weight == null) return sum;
+        effectiveWeight = s.weight;
+      }
+      return sum + effectiveWeight * s.reps;
     }, 0);
 
     // Completion: all scheduled sets (completed or not) as denominator

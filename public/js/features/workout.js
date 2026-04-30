@@ -304,7 +304,7 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
 
   html += `
     <div class="exercise-header">
-      <span class="exercise-name">${displayName}${isSwapped ? `<span class="swap-badge" title="Swapped from ${ex.exercise_name}">&#x21C4;</span>` : ''}${showWarmup ? '<span class="warmup-badge">Warmup</span>' : ''}${isDuration ? '<span class="duration-badge">Duration</span>' : ''}${ex.is_amrap ? `<span class="amrap-badge">${ex.amrap_last_only ? 'AMRAP Last' : 'AMRAP'}</span>` : ''}</span>
+      <span class="exercise-name">${displayName}${isSwapped ? `<span class="swap-badge" title="Swapped from ${ex.exercise_name}">&#x21C4;</span>` : ''}${showWarmup ? '<span class="warmup-badge">Warmup</span>' : ''}${isDuration ? '<span class="duration-badge">Duration</span>' : ''}${ex.is_amrap ? `<span class="amrap-badge">${ex.amrap_last_only ? 'AMRAP Last' : 'AMRAP'}</span>` : ''}${ex.is_assisted ? '<span class="assisted-badge" title="Assisted: enter assistance weight. Volume = bodyweight \u2212 assistance">Asst</span>' : ''}</span>
       <span class="exercise-target">${isDuration ? `${ex.target_sets} sets` : `${ex.target_sets}&times;${ex.target_reps}`}</span>
       <div class="reorder-btns">
         <button class="reorder-btn move-up" data-weid="${ex.id}">&uarr;</button>
@@ -318,11 +318,12 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
       <button class="swap-toggle${isSwapped ? ' is-swapped' : ''}" data-weid="${ex.id}">
         ${isSwapped ? '&#x21A9; Restore' : '&#x21C4; Alt'}
       </button>
+      ${!showWarmup ? `<button class="default-note-edit-btn" data-deid="${ex.day_exercise_id}" title="Edit permanent note">&#x270E;</button>` : ''}
     </div>
   `;
 
   if (prevStr) html += `<div class="previous-data">${prevStr}${prevFrom}</div>`;
-  if (ex.default_note && !showWarmup) html += `<div class="template-note">${ex.default_note.replace(/</g, '&lt;')}</div>`;
+  if (ex.default_note && !showWarmup) html += `<div class="template-note js-default-note" data-deid="${ex.day_exercise_id}">${ex.default_note.replace(/</g, '&lt;')}</div>`;
   if (prevNote && !showWarmup) html += `<div class="previous-data prev-note">${prevNote}</div>`;
 
   if (!ex.skipped) {
@@ -356,9 +357,9 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
             </button>
             <span class="set-label">${set.set_number}</span>
             <input type="number" class="set-input weight-input${isPartial ? ' partial' : ''}"
-                   value="${weightVal}" placeholder="kg" step="0.5" inputmode="decimal"
+                   value="${weightVal}" placeholder="${ex.is_assisted ? 'asst' : 'kg'}" step="0.5" inputmode="decimal"
                    data-weid="${ex.id}" data-set="${set.set_number}" data-field="weight">
-            <span class="set-unit">kg</span>
+            <span class="set-unit">${ex.is_assisted ? 'asst' : 'kg'}</span>
             <span class="set-separator">&times;</span>
             <input type="number" class="set-input reps-input${isPartial ? ' partial' : ''}"
                    value="${repsVal}" placeholder="reps" inputmode="numeric"
@@ -476,6 +477,11 @@ function wireExerciseCard(card, ex, workout) {
   if (markAllDoneBtn) markAllDoneBtn.addEventListener('click', () => markAllSetsDone(card, ex));
   const copyWeightBtn = card.querySelector('.copy-weight-btn');
   if (copyWeightBtn) copyWeightBtn.addEventListener('click', () => copyWeightToAll(card, ex));
+
+  const defaultNoteEditBtn = card.querySelector('.default-note-edit-btn');
+  if (defaultNoteEditBtn) defaultNoteEditBtn.addEventListener('click', () => openDefaultNoteEdit(card, ex));
+  const existingNoteDiv = card.querySelector('.js-default-note');
+  if (existingNoteDiv) existingNoteDiv.addEventListener('click', () => openDefaultNoteEdit(card, ex));
 }
 
 async function toggleSkip(ex) {
@@ -599,6 +605,68 @@ async function showAddExerciseToWorkoutPanel(container, workout) {
 
   nameInput.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') panel.remove();
+  });
+}
+
+function openDefaultNoteEdit(card, ex) {
+  if (card.querySelector('.default-note-input')) return; // already open
+
+  const existingDiv = card.querySelector('.js-default-note');
+  const currentNote = ex.default_note || '';
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'default-note-edit-wrapper';
+  wrapper.innerHTML = `<input type="text" class="default-note-input" value="${currentNote.replace(/"/g, '&quot;')}" placeholder="Permanent note (shown every workout)">`;
+
+  if (existingDiv) {
+    existingDiv.replaceWith(wrapper);
+  } else {
+    // Insert after the exercise sub-header
+    const subHeader = card.querySelector('.exercise-sub-header');
+    subHeader.insertAdjacentElement('afterend', wrapper);
+  }
+
+  const input = wrapper.querySelector('.default-note-input');
+  input.focus();
+  input.select();
+
+  const commit = async () => {
+    const newNote = input.value.trim();
+    if (newNote !== currentNote) {
+      await api(`/api/day-exercises/${ex.day_exercise_id}`, { method: 'PUT', body: { notes: newNote || null } });
+      ex.default_note = newNote || null;
+    }
+    // Restore the note div or remove it if empty
+    if (ex.default_note) {
+      const noteDiv = document.createElement('div');
+      noteDiv.className = 'template-note js-default-note';
+      noteDiv.dataset.deid = ex.day_exercise_id;
+      noteDiv.textContent = ex.default_note;
+      noteDiv.addEventListener('click', () => openDefaultNoteEdit(card, ex));
+      wrapper.replaceWith(noteDiv);
+    } else {
+      wrapper.remove();
+    }
+  };
+
+  const cancel = () => {
+    if (currentNote) {
+      const noteDiv = document.createElement('div');
+      noteDiv.className = 'template-note js-default-note';
+      noteDiv.dataset.deid = ex.day_exercise_id;
+      noteDiv.textContent = currentNote;
+      noteDiv.addEventListener('click', () => openDefaultNoteEdit(card, ex));
+      wrapper.replaceWith(noteDiv);
+    } else {
+      wrapper.remove();
+    }
+  };
+
+  let committed = false;
+  input.addEventListener('blur', () => { if (!committed) { committed = true; commit(); } });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { committed = true; commit(); }
+    if (e.key === 'Escape') { committed = true; cancel(); }
   });
 }
 

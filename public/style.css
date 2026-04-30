@@ -378,6 +378,57 @@ html, body {
   margin-bottom: 6px;
   padding: 2px 4px;
   border-left: 2px solid var(--border);
+  cursor: pointer;
+}
+.template-note:hover {
+  border-left-color: var(--accent);
+  color: var(--text);
+}
+
+/* --- Default note inline editor --- */
+.default-note-edit-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.9em;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0.6;
+}
+.default-note-edit-btn:hover {
+  opacity: 1;
+  color: var(--accent);
+  background: var(--bg-alt);
+}
+.default-note-edit-wrapper {
+  margin-bottom: 6px;
+}
+.default-note-input {
+  width: 100%;
+  font-size: 0.82em;
+  padding: 3px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  box-sizing: border-box;
+}
+
+/* --- Assisted Badge --- */
+.assisted-badge {
+  display: inline-block;
+  background: var(--beige);
+  color: #6b4226;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-left: 8px;
+  cursor: help;
 }
 
 /* --- Set Row --- */
@@ -1382,6 +1433,20 @@ html, body {
 
 .create-template-form .template-day-name-input {
   flex: 1;
+}
+
+/* --- Template "After:" position selector --- */
+.add-after-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85em;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+.add-after-label select {
+  flex: 1;
+  font-size: 0.9em;
 }
 
 /* --- Template Footer Actions (Add Exercise + Delete Template) --- */

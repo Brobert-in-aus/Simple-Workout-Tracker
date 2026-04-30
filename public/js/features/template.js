@@ -276,6 +276,7 @@ async function loadTemplateExercises(templateId, container) {
             <button class="btn btn-sm tmpl-duration-toggle${ex.is_duration ? ' active' : ''}" data-deid="${ex.id}">Dur</button>
             <button class="btn btn-sm tmpl-amrap-toggle${ex.is_amrap ? ' active' : ''}" data-deid="${ex.id}">F</button>
             ${ex.is_amrap ? `<button class="btn btn-sm tmpl-amrap-last-toggle${ex.amrap_last_only ? ' active' : ''}" data-deid="${ex.id}">Last</button>` : ''}
+            <button class="btn btn-sm tmpl-assisted-toggle${ex.is_assisted ? ' active' : ''}" data-deid="${ex.id}" title="Assisted machine — records assistance weight, volume = bodyweight − assistance">Asst</button>
             <button class="btn btn-sm btn-danger template-delete" data-deid="${ex.id}">&times;</button>
           </div>
         </div>
@@ -318,6 +319,12 @@ async function loadTemplateExercises(templateId, container) {
         <button type="button" class="btn btn-sm tmpl-duration-toggle" id="add-duration-${templateId}">Duration</button>
         <button type="button" class="btn btn-sm tmpl-amrap-toggle" id="add-amrap-${templateId}">AMRAP</button>
       </div>
+      <label class="add-after-label">After:
+        <select id="add-after-${templateId}">
+          <option value="-1">At the top</option>
+          ${exercises.map((e, i) => `<option value="${e.sort_order}"${i === exercises.length - 1 ? ' selected' : ''}>${e.exercise_name}</option>`).join('')}
+        </select>
+      </label>
       <div class="template-footer-actions">
         <button class="btn" id="add-btn-${templateId}">Add Exercise</button>
         <button class="btn btn-sm btn-danger template-delete-btn" id="delete-template-${templateId}">Delete Template</button>
@@ -365,6 +372,16 @@ async function loadTemplateExercises(templateId, container) {
       const deId = parseInt(btn.dataset.deid, 10);
       const isActive = btn.classList.contains('active');
       await api(`/api/day-exercises/${deId}`, { method: 'PUT', body: { amrap_last_only: isActive ? 0 : 1 } });
+      loadTemplateExercises(templateId, container);
+    });
+  });
+
+  container.querySelectorAll('.tmpl-assisted-toggle[data-deid]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const deId = parseInt(btn.dataset.deid, 10);
+      const isActive = btn.classList.contains('active');
+      await api(`/api/day-exercises/${deId}`, { method: 'PUT', body: { is_assisted: isActive ? 0 : 1 } });
       loadTemplateExercises(templateId, container);
     });
   });
@@ -700,11 +717,12 @@ async function loadTemplateExercises(templateId, container) {
     const isWarmup = document.getElementById(`add-warmup-${templateId}`).classList.contains('active');
     const isDuration = document.getElementById(`add-duration-${templateId}`).classList.contains('active');
     const isAmrap = document.getElementById(`add-amrap-${templateId}`).classList.contains('active');
+    const afterSortOrder = parseInt(document.getElementById(`add-after-${templateId}`).value, 10);
     if (!name) return;
 
     await api(`/api/templates/${templateId}/exercises`, {
       method: 'POST',
-      body: { name, target_sets: sets, target_reps: reps, is_warmup: isWarmup, is_duration: isDuration, is_amrap: isAmrap },
+      body: { name, target_sets: sets, target_reps: reps, is_warmup: isWarmup, is_duration: isDuration, is_amrap: isAmrap, after_sort_order: afterSortOrder },
     });
     document.getElementById(`add-name-${templateId}`).value = '';
     document.getElementById(`add-warmup-${templateId}`).classList.remove('active');
