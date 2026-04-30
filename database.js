@@ -975,7 +975,7 @@ function syncLinkedExercises(dayExerciseId, fields) {
 
   // Propagate other fields (notes, workout-type flags) to all linked slots regardless
   // of independence state — these are always shared.
-  const otherSyncable = ['is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'notes', 'is_assisted'];
+  const otherSyncable = ['is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'notes'];
   const otherUpdates = [], otherValues = [];
   for (const [key, val] of Object.entries(fields)) {
     if (otherSyncable.includes(key)) {
