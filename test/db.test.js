@@ -403,7 +403,7 @@ test('macro TDEE context falls back to recent same day-type Apple history when c
     });
   }
 
-  const context = db.getMacroTdeeContextForDate('2026-04-28');
+  const context = db.getMacroTdeeContextForDate('2026-04-28', '2026-04-21');
   assert.equal(context.source, 'fallback_same_day_type');
   assert.equal(context.fallback_sample_count, 3);
   assert.equal(context.fallback_day_type, 'workout');
@@ -450,7 +450,7 @@ test('macro TDEE context falls back to recent Apple history when there are too f
     });
   }
 
-  const context = db.getMacroTdeeContextForDate('2026-04-24');
+  const context = db.getMacroTdeeContextForDate('2026-04-24', '2026-04-21');
   assert.equal(context.source, 'fallback_recent');
   assert.equal(context.fallback_sample_count, 3);
   assert.equal(context.fallback_day_type, 'workout');

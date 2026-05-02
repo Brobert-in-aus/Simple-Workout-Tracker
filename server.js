@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const { promisify } = require('util');
 const db = require('./database');
 const { runHealthImport, normalizeImportSource, validateImportSourceRoot } = require('./import-health');
@@ -11,6 +11,52 @@ const execAsync = promisify(exec);
 const app = express();
 const PORT = process.env.PORT || 3000;
 let backupTimer = null;
+
+function quoteCmdArg(value) {
+  return `"${String(value).replace(/"/g, '\\"')}"`;
+}
+
+async function installDependenciesIfPackageChanged(packageJsonBefore) {
+  const packageJsonPath = path.join(__dirname, 'package.json');
+  const packageJsonAfter = fs.existsSync(packageJsonPath)
+    ? fs.readFileSync(packageJsonPath, 'utf8')
+    : '';
+
+  if (packageJsonAfter === packageJsonBefore) return;
+
+  const runtimeNpm = path.join(__dirname, 'runtime', process.platform === 'win32' ? 'npm.cmd' : 'npm');
+  const npmCommand = fs.existsSync(runtimeNpm)
+    ? quoteCmdArg(runtimeNpm)
+    : (process.platform === 'win32' ? 'npm.cmd' : 'npm');
+
+  await execAsync(`${npmCommand} install --production`, { cwd: __dirname, timeout: 120000 });
+}
+
+function scheduleDetachedRestart() {
+  const dataDir = path.join(__dirname, 'data');
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+
+  const logPath = path.join(dataDir, 'server-restart.log');
+  const nodePath = process.execPath;
+  const serverPath = path.join(__dirname, 'server.js');
+
+  const command = process.platform === 'win32'
+    ? `ping -n 2 127.0.0.1 >nul & ${quoteCmdArg(nodePath)} ${quoteCmdArg(serverPath)} >> ${quoteCmdArg(logPath)} 2>&1`
+    : `sleep 1; exec ${quoteCmdArg(nodePath)} ${quoteCmdArg(serverPath)} >> ${quoteCmdArg(logPath)} 2>&1`;
+
+  const child = spawn(process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh', [
+    process.platform === 'win32' ? '/d' : '-c',
+    process.platform === 'win32' ? '/s' : command,
+    process.platform === 'win32' ? '/c' : undefined,
+    process.platform === 'win32' ? command : undefined,
+  ].filter(Boolean), {
+    cwd: __dirname,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+}
 
 app.use(express.json({ limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -919,7 +965,13 @@ app.post('/api/update/apply', async (req, res) => {
     if (dirtyLines.length > 0) {
       return res.status(409).json({ error: `Working tree has uncommitted changes — pull aborted.\n${dirtyLines.join('\n')}` });
     }
+    const packageJsonPath = path.join(__dirname, 'package.json');
+    const packageJsonBefore = fs.existsSync(packageJsonPath)
+      ? fs.readFileSync(packageJsonPath, 'utf8')
+      : '';
     await execAsync('git pull', { cwd: __dirname, timeout: 30000 });
+    await installDependenciesIfPackageChanged(packageJsonBefore);
+    scheduleDetachedRestart();
     res.json({ ok: true });
     setTimeout(shutdown, 200);
   } catch (err) {

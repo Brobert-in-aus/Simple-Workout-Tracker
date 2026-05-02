@@ -1797,7 +1797,7 @@ function buildMacroTdeeContextFromRow(row, adjustments = null) {
   };
 }
 
-function getMacroTdeeContextForDate(date) {
+function getMacroTdeeContextForDate(date, todayDate = null) {
   const adjustments = getAppleHealthEnergyAdjustments();
   const row = getHealthDailyMetricsByDate(date);
   if (row) {
@@ -1808,7 +1808,7 @@ function getMacroTdeeContextForDate(date) {
     };
   }
 
-  const targetIsWorkoutDay = isWorkoutDayForNutrition(date);
+  const targetIsWorkoutDay = isWorkoutDayForNutrition(date, todayDate);
   const recentRows = db.prepare(`
     SELECT * FROM health_daily_metrics
     WHERE date < ?
