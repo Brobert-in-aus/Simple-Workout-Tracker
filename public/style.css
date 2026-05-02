@@ -311,6 +311,30 @@ html, body {
   background: var(--stretch-bg);
   border-color: #a8d8c8;
 }
+.exercise-card.stretch-card.stretch-done {
+  opacity: 0.6;
+}
+.stretch-done-btn {
+  background: none;
+  border: 2px solid #a8d8c8;
+  border-radius: 50%;
+  color: #a8d8c8;
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.stretch-done-btn.done {
+  background: var(--stretch-text);
+  border-color: var(--stretch-text);
+  color: #fff;
+}
 
 .exercise-card.superset-start {
   border-bottom-left-radius: 0;

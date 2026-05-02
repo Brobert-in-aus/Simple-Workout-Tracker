@@ -691,7 +691,8 @@ function openDefaultNoteEdit(card, ex) {
 
 function createStretchCard(ex, workout) {
   const card = document.createElement('div');
-  card.className = 'exercise-card stretch-card';
+  const isDone = ex.sets.length > 0 && ex.sets.every((s) => s.completed);
+  card.className = `exercise-card stretch-card${isDone ? ' stretch-done' : ''}`;
 
   const isDuration = !!ex.is_duration;
   const targetDisplay = isDuration ? `${ex.target_sets} sets` : `${ex.target_sets}&times;${ex.target_reps}`;
@@ -701,6 +702,7 @@ function createStretchCard(ex, workout) {
     <div class="exercise-header">
       <span class="exercise-name">${ex.exercise_name}<span class="stretch-badge">Stretch</span></span>
       <span class="exercise-target">${targetDisplay}</span>
+      <button class="stretch-done-btn${isDone ? ' done' : ''}" title="Mark stretch done">&#10003;</button>
       <div class="reorder-btns">
         <button class="reorder-btn move-up" data-weid="${ex.id}">&uarr;</button>
         <button class="reorder-btn move-down" data-weid="${ex.id}">&darr;</button>
@@ -755,6 +757,15 @@ function createStretchCard(ex, workout) {
 }
 
 function wireStretchCard(card, ex, workout) {
+  const doneBtn = card.querySelector('.stretch-done-btn');
+  if (doneBtn) {
+    doneBtn.addEventListener('click', () => {
+      const nowDone = doneBtn.classList.toggle('done');
+      card.classList.toggle('stretch-done', nowDone);
+      debounceSave(ex);
+    });
+  }
+
   card.querySelectorAll('.set-input').forEach((input) => {
     attachFirstTapCursorEnd(input);
     input.addEventListener('focus', () => moveCursorToEnd(input));
@@ -786,9 +797,12 @@ async function saveExercise(ex) {
   const sets = [];
   const targetRepsNum = parseInt(ex.target_reps, 10) || null;
 
+  const stretchDoneBtn = card.querySelector('.stretch-done-btn');
+  const stretchCompleted = stretchDoneBtn ? (stretchDoneBtn.classList.contains('done') ? 1 : 0) : null;
+
   card.querySelectorAll('.set-row').forEach((row) => {
     const checkBtn = row.querySelector('.set-check');
-    const completed = checkBtn && checkBtn.classList.contains('done') ? 1 : 0;
+    const completed = stretchCompleted !== null ? stretchCompleted : (checkBtn && checkBtn.classList.contains('done') ? 1 : 0);
     const durationInput = row.querySelector('.duration-input');
 
     if (durationInput) {
