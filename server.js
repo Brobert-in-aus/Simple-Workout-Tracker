@@ -39,17 +39,61 @@ function scheduleDetachedRestart() {
   const logPath = path.join(dataDir, 'server-restart.log');
   const nodePath = process.execPath;
   const serverPath = path.join(__dirname, 'server.js');
+  const restartScript = `
+    const fs = require('fs');
+    const net = require('net');
+    const { spawn } = require('child_process');
+    const cwd = ${JSON.stringify(__dirname)};
+    const nodePath = ${JSON.stringify(nodePath)};
+    const serverPath = ${JSON.stringify(serverPath)};
+    const logPath = ${JSON.stringify(logPath)};
+    const port = Number(process.env.PORT || ${JSON.stringify(PORT)});
 
-  const command = process.platform === 'win32'
-    ? `ping -n 2 127.0.0.1 >nul & ${quoteCmdArg(nodePath)} ${quoteCmdArg(serverPath)} >> ${quoteCmdArg(logPath)} 2>&1`
-    : `sleep 1; exec ${quoteCmdArg(nodePath)} ${quoteCmdArg(serverPath)} >> ${quoteCmdArg(logPath)} 2>&1`;
+    function log(message) {
+      fs.appendFileSync(logPath, '[' + new Date().toISOString() + '] ' + message + '\\n');
+    }
 
-  const child = spawn(process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh', [
-    process.platform === 'win32' ? '/d' : '-c',
-    process.platform === 'win32' ? '/s' : command,
-    process.platform === 'win32' ? '/c' : undefined,
-    process.platform === 'win32' ? command : undefined,
-  ].filter(Boolean), {
+    function isPortOpen(callback) {
+      const socket = net.createConnection({ host: '127.0.0.1', port });
+      let finished = false;
+      function finish(open) {
+        if (finished) return;
+        finished = true;
+        socket.destroy();
+        callback(open);
+      }
+      socket.once('connect', () => finish(true));
+      socket.once('error', () => finish(false));
+      socket.setTimeout(500, () => finish(false));
+    }
+
+    let attempts = 0;
+    function waitForPortAndStart() {
+      attempts += 1;
+      isPortOpen((open) => {
+        if (open && attempts < 120) {
+          setTimeout(waitForPortAndStart, 500);
+          return;
+        }
+
+        log(open ? 'Port still busy after 60s; attempting start anyway.' : 'Port is free; starting server.');
+        const output = fs.openSync(logPath, 'a');
+        const child = spawn(nodePath, [serverPath], {
+          cwd,
+          detached: true,
+          stdio: ['ignore', output, output],
+          windowsHide: true,
+        });
+        child.unref();
+        log('Spawned server PID ' + child.pid + '.');
+      });
+    }
+
+    log('Restart supervisor armed.');
+    setTimeout(waitForPortAndStart, 250);
+  `;
+
+  const child = spawn(nodePath, ['-e', restartScript], {
     cwd: __dirname,
     detached: true,
     stdio: 'ignore',
