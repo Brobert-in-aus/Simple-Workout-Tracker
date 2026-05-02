@@ -21,6 +21,7 @@ export async function loadWeek() {
   const schedule = await getSchedule();
   const dayTemplates = {};
   for (const s of schedule) {
+    if (s.template_is_stretch) continue;
     if (!dayTemplates[s.day_index]) dayTemplates[s.day_index] = [];
     dayTemplates[s.day_index].push(s.template_name);
   }
@@ -33,9 +34,11 @@ export async function loadWeek() {
   const actualWorkouts = {};
   const startedSet = new Set();
   for (const w of rangeData) {
-    startedSet.add(w.date);
-    if (!actualWorkouts[w.date]) actualWorkouts[w.date] = [];
-    actualWorkouts[w.date].push(w.template_name);
+    if (!w.is_stretch) {
+      startedSet.add(w.date);
+      if (!actualWorkouts[w.date]) actualWorkouts[w.date] = [];
+      actualWorkouts[w.date].push(w.template_name);
+    }
   }
 
   const strip = document.getElementById('week-strip');

@@ -583,10 +583,14 @@ function isWorkoutDayForNutrition(date, todayDate = null) {
   })();
 
   if (date < localToday) {
-    return getWorkoutsForDate(date).length > 0;
+    const workouts = getWorkoutsForDate(date);
+    return workouts.some(w => {
+      const day = db.prepare('SELECT is_stretch FROM days WHERE id = ?').get(w.day_id);
+      return !day || !day.is_stretch;
+    });
   }
 
-  return getScheduleForDate(date).length > 0;
+  return getScheduleForDate(date).some(s => !s.is_stretch);
 }
 
 // --- Day/Template helpers (kept for backward compat) ---
@@ -1128,7 +1132,7 @@ function getWorkoutDatesInRange(fromDate, toDate) {
 
 function getWorkoutsInRange(fromDate, toDate) {
   return db.prepare(`
-    SELECT w.date, d.name as template_name
+    SELECT w.date, d.name as template_name, d.is_stretch
     FROM workouts w
     JOIN days d ON d.id = w.day_id
     WHERE w.date >= ? AND w.date <= ?
