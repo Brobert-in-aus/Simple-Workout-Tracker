@@ -129,9 +129,9 @@ app.get('/api/templates', (req, res) => {
 });
 
 app.post('/api/templates', (req, res) => {
-  const { name } = req.body;
+  const { name, is_stretch } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });
-  const id = db.createTemplate(name.trim());
+  const id = db.createTemplate(name.trim(), !!is_stretch);
   res.json({ id });
 });
 
@@ -145,9 +145,12 @@ app.post('/api/templates/:id/duplicate', (req, res) => {
 });
 
 app.put('/api/templates/:id', (req, res) => {
-  const { name } = req.body;
-  if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });
-  db.updateTemplate(parseInt(req.params.id), name.trim());
+  const { name, is_stretch } = req.body;
+  const updates = {};
+  if (name && name.trim()) updates.name = name.trim();
+  if (is_stretch != null) updates.is_stretch = is_stretch ? 1 : 0;
+  if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'Nothing to update' });
+  db.updateTemplate(parseInt(req.params.id), updates);
   res.json({ ok: true });
 });
 
@@ -370,7 +373,7 @@ app.get('/api/workout/:date', (req, res) => {
 
   for (const w of existingWorkouts) {
     const dayExercises = db.getDayExercises(w.day_id);
-    const prevData = buildCrossTemplatePrev(dayExercises, w.day_id, date);
+    const prevData = w.is_stretch ? null : buildCrossTemplatePrev(dayExercises, w.day_id, date);
     const externalLinks = db.getExternalWorkoutLinksForWorkout(w.id).map(link => ({
       external_workout_id: link.external_workout_id,
       external_id: link.external_id,
@@ -402,8 +405,9 @@ app.get('/api/workout/:date', (req, res) => {
     if (existingTemplateIds.has(sched.template_id)) continue; // already have a workout
 
     const templateId = sched.template_id;
+    const isStretch = !!sched.is_stretch;
     const templateExercises = db.getDayExercises(templateId);
-    const prevData = buildCrossTemplatePrev(templateExercises, templateId, date);
+    const prevData = isStretch ? null : buildCrossTemplatePrev(templateExercises, templateId, date);
 
     const preview = {
       id: null,
@@ -412,6 +416,7 @@ app.get('/api/workout/:date', (req, res) => {
       template_id: templateId,
       template_name: sched.template_name,
       day_name: sched.template_name,
+      is_stretch: isStretch ? 1 : 0,
       preview: true,
       exercises: templateExercises.map((te, idx) => ({
         id: null,
@@ -454,31 +459,35 @@ app.post('/api/workout/:date/begin', (req, res) => {
 
   const workout = db.initWorkoutFromTemplate(date, template_id);
   const day = db.getDb().prepare('SELECT * FROM days WHERE id = ?').get(template_id);
+  const isStretch = !!(day && day.is_stretch);
   const exercises = db.getWorkoutFull(workout.id);
   const workoutFull = {
     ...workout,
     template_id: template_id,
     template_name: day ? day.name : '',
     day_name: day ? day.name : '',
+    is_stretch: isStretch ? 1 : 0,
     exercises
   };
 
-  // Build cross-template prev data
+  // Build cross-template prev data (not applicable for stretch templates)
   const dayExercises = db.getDayExercises(template_id);
   const prevData = [];
-  for (const te of dayExercises) {
-    const scopedDayId = te.targets_independent ? template_id : null;
-    const recent = db.getMostRecentExerciseData(te.exercise_id, date, te.is_warmup, scopedDayId);
-    if (recent) {
-      prevData.push({
-        day_exercise_id: te.id,
-        exercise_id: te.exercise_id,
-        exercise_name: te.exercise_name,
-        skipped: recent.skipped,
-        note: recent.note,
-        sets: recent.sets,
-        from_template: recent.day_id !== template_id ? recent.template_name : null,
-      });
+  if (!isStretch) {
+    for (const te of dayExercises) {
+      const scopedDayId = te.targets_independent ? template_id : null;
+      const recent = db.getMostRecentExerciseData(te.exercise_id, date, te.is_warmup, scopedDayId);
+      if (recent) {
+        prevData.push({
+          day_exercise_id: te.id,
+          exercise_id: te.exercise_id,
+          exercise_name: te.exercise_name,
+          skipped: recent.skipped,
+          note: recent.note,
+          sets: recent.sets,
+          from_template: recent.day_id !== template_id ? recent.template_name : null,
+        });
+      }
     }
   }
 

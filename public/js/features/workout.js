@@ -143,7 +143,7 @@ export async function loadWorkout() {
         preview.querySelector('button').addEventListener('click', () => beginWorkout(workout.template_id));
       }
       container.appendChild(preview);
-      renderExercisesPreview(container, workout.exercises, previous);
+      renderExercisesPreview(container, workout.exercises, previous, !!workout.is_stretch);
       continue;
     }
 
@@ -166,19 +166,33 @@ async function beginWorkout(templateId) {
   loadWorkout();
 }
 
-function renderExercisesPreview(container, exercises, previous) {
+function renderExercisesPreview(container, exercises, previous, isStretch = false) {
   const groups = groupExercises(exercises);
 
   for (const group of groups) {
-    const isSuperset = group.length > 1;
+    const isSuperset = !isStretch && group.length > 1;
     group.forEach((ex, idx) => {
+      const card = document.createElement('div');
+
+      if (isStretch) {
+        card.className = 'exercise-card preview-card stretch-card';
+        const targetDisplay = ex.is_duration ? `${ex.target_sets} sets` : `${ex.target_sets}&times;${ex.target_reps}`;
+        card.innerHTML = `
+          <div class="exercise-header">
+            <span class="exercise-name">${ex.exercise_name}<span class="stretch-badge">Stretch</span></span>
+            <span class="exercise-target">${targetDisplay}</span>
+          </div>
+        `;
+        container.appendChild(card);
+        return;
+      }
+
       const prev = findPreviousExercise(ex.day_exercise_id, previous, ex.exercise_id, ex.is_warmup);
       const prevStr = buildPrevString(prev, !!ex.is_duration);
       const prevNote = prev && prev.note ? prev.note : '';
       const prevFrom = prev && prev.from_template ? ` (from ${prev.from_template})` : '';
       const showWarmup = isWarmupExercise(ex, prev);
 
-      const card = document.createElement('div');
       card.className = 'exercise-card preview-card';
       if (isSuperset) {
         if (idx === 0) card.classList.add('superset-start');
@@ -257,16 +271,18 @@ function groupExercises(exercises) {
 }
 
 function renderExercises(container, workout, previous) {
+  const isStretch = !!workout.is_stretch;
   const groups = groupExercises(workout.exercises);
 
   for (const group of groups) {
-    const isSuperset = group.length > 1;
+    const isSuperset = !isStretch && group.length > 1;
     const cardPairs = group.map((ex, idx) => {
-      const card = createExerciseCard(ex, workout, previous, isSuperset, idx, group.length);
+      const card = isStretch
+        ? createStretchCard(ex, workout)
+        : createExerciseCard(ex, workout, previous, isSuperset, idx, group.length);
       container.appendChild(card);
       return { card, ex };
     });
-    // Link superset siblings so set completion propagates across the group
     if (isSuperset) {
       cardPairs.forEach(({ card }, i) => {
         card._supersetSiblings = cardPairs.filter((_, j) => j !== i);
@@ -670,13 +686,100 @@ function openDefaultNoteEdit(card, ex) {
   });
 }
 
+function createStretchCard(ex, workout) {
+  const card = document.createElement('div');
+  card.className = 'exercise-card stretch-card';
+
+  const isDuration = !!ex.is_duration;
+  const targetDisplay = isDuration ? `${ex.target_sets} sets` : `${ex.target_sets}&times;${ex.target_reps}`;
+  const targetRepsNum = parseInt(ex.target_reps, 10) || 0;
+
+  let html = `
+    <div class="exercise-header">
+      <span class="exercise-name">${ex.exercise_name}<span class="stretch-badge">Stretch</span></span>
+      <span class="exercise-target">${targetDisplay}</span>
+      <div class="reorder-btns">
+        <button class="reorder-btn move-up" data-weid="${ex.id}">&uarr;</button>
+        <button class="reorder-btn move-down" data-weid="${ex.id}">&darr;</button>
+      </div>
+    </div>
+  `;
+
+  if (!ex.skipped) {
+    html += '<div class="sets-container">';
+    for (const set of ex.sets) {
+      if (isDuration) {
+        const durationVal = set.duration_seconds != null ? set.duration_seconds : '';
+        html += `
+          <div class="set-row" data-duration="1">
+            <span class="set-label">${set.set_number}</span>
+            <input type="number" class="set-input duration-input"
+                   value="${durationVal}" placeholder="sec" inputmode="numeric"
+                   data-weid="${ex.id}" data-set="${set.set_number}" data-field="duration">
+            <span class="set-unit">sec</span>
+          </div>
+        `;
+      } else {
+        const repsVal = set.reps != null ? set.reps : (targetRepsNum || '');
+        html += `
+          <div class="set-row">
+            <span class="set-label">${set.set_number}</span>
+            <input type="number" class="set-input reps-input"
+                   value="${repsVal}" placeholder="reps" inputmode="numeric"
+                   data-weid="${ex.id}" data-set="${set.set_number}" data-field="reps">
+          </div>
+        `;
+      }
+    }
+    html += '</div>';
+    html += `
+      <div class="set-actions">
+        <button class="btn btn-sm btn-outline add-set-btn" data-weid="${ex.id}" data-target-reps="${targetRepsNum}">+ Set</button>
+        ${ex.sets.length > 1 ? `<button class="btn btn-sm btn-outline remove-set-btn" data-weid="${ex.id}">&minus; Set</button>` : ''}
+      </div>
+    `;
+  }
+
+  html += `
+    <div class="exercise-note">
+      <textarea rows="1" placeholder="Note..." data-weid="${ex.id}" data-field="note">${ex.note || ''}</textarea>
+    </div>
+  `;
+
+  card.innerHTML = html;
+  wireStretchCard(card, ex, workout);
+  return card;
+}
+
+function wireStretchCard(card, ex, workout) {
+  card.querySelectorAll('.set-input').forEach((input) => {
+    attachFirstTapCursorEnd(input);
+    input.addEventListener('focus', () => moveCursorToEnd(input));
+    input.addEventListener('change', () => debounceSave(ex));
+    input.addEventListener('input', () => debounceSave(ex));
+  });
+
+  const noteArea = card.querySelector('textarea[data-field="note"]');
+  if (noteArea) noteArea.addEventListener('input', () => debounceSave(ex));
+
+  const moveUp = card.querySelector('.move-up');
+  const moveDown = card.querySelector('.move-down');
+  if (moveUp) moveUp.addEventListener('click', () => moveExercise(ex, workout, -1));
+  if (moveDown) moveDown.addEventListener('click', () => moveExercise(ex, workout, 1));
+
+  const addSetBtn = card.querySelector('.add-set-btn');
+  if (addSetBtn) addSetBtn.addEventListener('click', () => addSet(ex, card));
+  const removeSetBtn = card.querySelector('.remove-set-btn');
+  if (removeSetBtn) removeSetBtn.addEventListener('click', () => removeSet(ex, card));
+}
+
 function debounceSave(ex) {
   if (state.saveTimers[ex.id]) clearTimeout(state.saveTimers[ex.id]);
   state.saveTimers[ex.id] = setTimeout(() => saveExercise(ex), 500);
 }
 
 async function saveExercise(ex) {
-  const card = document.querySelector(`.skip-toggle[data-weid="${ex.id}"]`).closest('.exercise-card');
+  const card = document.querySelector(`[data-weid="${ex.id}"]`)?.closest('.exercise-card');
   const sets = [];
   const targetRepsNum = parseInt(ex.target_reps, 10) || null;
 
@@ -774,6 +877,8 @@ function addSet(ex, card) {
   const row = document.createElement('div');
   row.className = 'set-row';
 
+  const isStretch = card.classList.contains('stretch-card');
+
   if (isDuration) {
     let prevDuration = '';
     if (currentRows.length > 0) {
@@ -781,7 +886,13 @@ function addSet(ex, card) {
       if (lastDur && lastDur.value) prevDuration = lastDur.value;
     }
     row.dataset.duration = '1';
-    row.innerHTML = `
+    row.innerHTML = isStretch ? `
+      <span class="set-label">${newSetNum}</span>
+      <input type="number" class="set-input duration-input"
+             value="${prevDuration}" placeholder="sec" inputmode="numeric"
+             data-weid="${ex.id}" data-set="${newSetNum}" data-field="duration">
+      <span class="set-unit">sec</span>
+    ` : `
       <button class="set-check" data-weid="${ex.id}" data-set="${newSetNum}"></button>
       <span class="set-label">${newSetNum}</span>
       <input type="number" class="set-input duration-input"
@@ -796,7 +907,12 @@ function addSet(ex, card) {
       if (lastWeight && lastWeight.value) prevWeight = lastWeight.value;
     }
     const newSetAmrap = ex.is_amrap && !ex.amrap_last_only;
-    row.innerHTML = `
+    row.innerHTML = isStretch ? `
+      <span class="set-label">${newSetNum}</span>
+      <input type="number" class="set-input reps-input"
+             value="${targetRepsNum || ''}" placeholder="reps" inputmode="numeric"
+             data-weid="${ex.id}" data-set="${newSetNum}" data-field="reps">
+    ` : `
       <button class="set-check" data-weid="${ex.id}" data-set="${newSetNum}"></button>
       <span class="set-label">${newSetNum}</span>
       <input type="number" class="set-input weight-input"
@@ -813,12 +929,15 @@ function addSet(ex, card) {
   container.appendChild(row);
 
   row.querySelectorAll('.set-input').forEach((input) => {
+    attachFirstTapCursorEnd(input);
     input.addEventListener('focus', () => moveCursorToEnd(input));
     input.addEventListener('change', () => debounceSave(ex));
     input.addEventListener('input', () => debounceSave(ex));
   });
 
-  row.querySelector('.set-check').addEventListener('click', function onCheckClick() {
+  if (isStretch) {
+    // Stretch rows have no check button — wire inputs only (done above) and skip to end
+  } else { row.querySelector('.set-check').addEventListener('click', function onCheckClick() {
     const isDone = this.classList.contains('done');
     if (isDone) {
       this.classList.remove('done');
@@ -858,6 +977,7 @@ function addSet(ex, card) {
       debounceSave(ex);
     });
   }
+  } // end else (non-stretch)
 
   let removeBtn = card.querySelector('.remove-set-btn');
   if (!removeBtn) {

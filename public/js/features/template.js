@@ -74,80 +74,120 @@ export async function loadTemplate() {
 
   container.appendChild(scheduleSection);
 
-  const templatesSection = document.createElement('div');
-  templatesSection.className = 'template-section';
-  templatesSection.innerHTML = '<h3 class="template-section-title">Templates</h3>';
+  const tabsSection = document.createElement('div');
+  tabsSection.className = 'template-section';
 
-  const createBtn = document.createElement('button');
-  createBtn.className = 'btn create-template-btn';
-  createBtn.textContent = '+ Create Template';
-  createBtn.addEventListener('click', () => showCreateTemplateForm(templatesSection, createBtn));
-  templatesSection.appendChild(createBtn);
+  const tabHeaders = document.createElement('div');
+  tabHeaders.className = 'template-tab-headers';
+  tabHeaders.innerHTML = `
+    <button class="template-tab-btn${state.activeTemplateTab !== 'stretch' ? ' active' : ''}" data-tab="workout">Workout</button>
+    <button class="template-tab-btn${state.activeTemplateTab === 'stretch' ? ' active' : ''}" data-tab="stretch">Stretches</button>
+  `;
+  tabsSection.appendChild(tabHeaders);
 
-  for (const tmpl of templates) {
-    const tmplEl = document.createElement('div');
-    tmplEl.className = 'template-day';
+  const tabContent = document.createElement('div');
+  tabContent.className = 'template-tab-content';
+  tabsSection.appendChild(tabContent);
 
-    const header = document.createElement('div');
-    header.className = 'template-day-header';
-    header.style.cursor = 'pointer';
+  const renderTabContent = (isStretch) => {
+    tabContent.innerHTML = '';
+    const tmplsToShow = templates.filter((t) => !!t.is_stretch === isStretch);
 
-    const nameInput = document.createElement('input');
-    nameInput.type = 'text';
-    nameInput.className = 'template-day-name-input';
-    nameInput.value = tmpl.name;
-    nameInput.placeholder = 'Template name';
+    const createBtn = document.createElement('button');
+    createBtn.className = 'btn create-template-btn';
+    createBtn.textContent = isStretch ? '+ Create Stretch Template' : '+ Create Template';
+    createBtn.addEventListener('click', () => showCreateTemplateForm(tabContent, createBtn, isStretch));
+    tabContent.appendChild(createBtn);
 
-    const saveTemplateName = async () => {
-      const newName = nameInput.value.trim();
-      if (newName && newName !== tmpl.name) {
-        await api(`/api/templates/${tmpl.id}`, { method: 'PUT', body: { name: newName } });
+    for (const tmpl of tmplsToShow) {
+      const tmplEl = document.createElement('div');
+      tmplEl.className = 'template-day';
+
+      const header = document.createElement('div');
+      header.className = 'template-day-header';
+      header.style.cursor = 'pointer';
+
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.className = 'template-day-name-input';
+      nameInput.value = tmpl.name;
+      nameInput.placeholder = 'Template name';
+
+      const saveTemplateName = async () => {
+        const newName = nameInput.value.trim();
+        if (newName && newName !== tmpl.name) {
+          await api(`/api/templates/${tmpl.id}`, { method: 'PUT', body: { name: newName } });
+          invalidateTemplatesCache();
+          invalidateScheduleCache();
+          loadTemplate();
+          loadWeek();
+        }
+      };
+      nameInput.addEventListener('blur', saveTemplateName);
+      nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') nameInput.blur(); });
+      nameInput.addEventListener('click', (e) => e.stopPropagation());
+
+      const chevron = document.createElement('span');
+      chevron.className = 'template-chevron';
+      chevron.innerHTML = '&rsaquo;';
+
+      const duplicateBtn = document.createElement('button');
+      duplicateBtn.className = 'btn btn-sm btn-outline template-duplicate-btn';
+      duplicateBtn.textContent = 'Duplicate';
+      duplicateBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const result = await api(`/api/templates/${tmpl.id}/duplicate`, { method: 'POST', body: {} });
         invalidateTemplatesCache();
         invalidateScheduleCache();
+        showToast(`Duplicated as "${result.name}"`);
         loadTemplate();
-        loadWeek();
-      }
-    };
-    nameInput.addEventListener('blur', saveTemplateName);
-    nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') nameInput.blur(); });
-    nameInput.addEventListener('click', (e) => e.stopPropagation());
+      });
 
-    const chevron = document.createElement('span');
-    chevron.className = 'template-chevron';
-    chevron.innerHTML = '&rsaquo;';
+      const typeToggleBtn = document.createElement('button');
+      typeToggleBtn.className = 'btn btn-sm tmpl-type-toggle';
+      typeToggleBtn.title = isStretch ? 'Convert to workout template' : 'Convert to stretch template';
+      typeToggleBtn.textContent = isStretch ? 'Make Workout' : 'Make Stretch';
+      typeToggleBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await api(`/api/templates/${tmpl.id}`, { method: 'PUT', body: { is_stretch: isStretch ? 0 : 1 } });
+        invalidateTemplatesCache();
+        // Switch tab to follow the moved template
+        state.activeTemplateTab = isStretch ? 'workout' : 'stretch';
+        loadTemplate();
+      });
 
-    const duplicateBtn = document.createElement('button');
-    duplicateBtn.className = 'btn btn-sm btn-outline template-duplicate-btn';
-    duplicateBtn.textContent = 'Duplicate';
-    duplicateBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const result = await api(`/api/templates/${tmpl.id}/duplicate`, { method: 'POST', body: {} });
-      invalidateTemplatesCache();
-      invalidateScheduleCache();
-      showToast(`Duplicated as "${result.name}"`);
-      loadTemplate();
+      header.appendChild(nameInput);
+      header.appendChild(typeToggleBtn);
+      header.appendChild(duplicateBtn);
+      header.appendChild(chevron);
+
+      const body = document.createElement('div');
+      body.className = 'template-day-body';
+
+      header.addEventListener('click', () => {
+        body.classList.toggle('open');
+        if (body.classList.contains('open')) {
+          loadTemplateExercises(tmpl.id, body, isStretch);
+        }
+      });
+
+      tmplEl.appendChild(header);
+      tmplEl.appendChild(body);
+      tabContent.appendChild(tmplEl);
+    }
+  };
+
+  tabHeaders.querySelectorAll('.template-tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.activeTemplateTab = btn.dataset.tab;
+      tabHeaders.querySelectorAll('.template-tab-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderTabContent(btn.dataset.tab === 'stretch');
     });
+  });
 
-    header.appendChild(nameInput);
-    header.appendChild(duplicateBtn);
-    header.appendChild(chevron);
-
-    const body = document.createElement('div');
-    body.className = 'template-day-body';
-
-    header.addEventListener('click', () => {
-      body.classList.toggle('open');
-      if (body.classList.contains('open')) {
-        loadTemplateExercises(tmpl.id, body);
-      }
-    });
-
-    tmplEl.appendChild(header);
-    tmplEl.appendChild(body);
-    templatesSection.appendChild(tmplEl);
-  }
-
-  container.appendChild(templatesSection);
+  renderTabContent(state.activeTemplateTab === 'stretch');
+  container.appendChild(tabsSection);
 }
 
 function showScheduleDropdown(dayIndex, anchorBtn, templates) {
@@ -159,7 +199,7 @@ function showScheduleDropdown(dayIndex, anchorBtn, templates) {
   for (const tmpl of templates) {
     const option = document.createElement('div');
     option.className = 'schedule-dropdown-option';
-    option.textContent = tmpl.name;
+    option.textContent = tmpl.name + (tmpl.is_stretch ? ' (Stretch)' : '');
     option.addEventListener('click', async () => {
       await api('/api/schedule', { method: 'POST', body: { day_index: dayIndex, template_id: tmpl.id } });
       dropdown.remove();
@@ -181,7 +221,7 @@ function showScheduleDropdown(dayIndex, anchorBtn, templates) {
   setTimeout(() => document.addEventListener('click', closeHandler), 0);
 }
 
-function showCreateTemplateForm(section, btn) {
+function showCreateTemplateForm(section, btn, isStretch = false) {
   const form = document.createElement('div');
   form.className = 'create-template-form';
   form.innerHTML = `
@@ -199,7 +239,7 @@ function showCreateTemplateForm(section, btn) {
   form.querySelector('#new-template-save').addEventListener('click', async () => {
     const name = nameInput.value.trim();
     if (!name) return;
-    await api('/api/templates', { method: 'POST', body: { name } });
+    await api('/api/templates', { method: 'POST', body: { name, is_stretch: isStretch ? 1 : 0 } });
     invalidateTemplatesCache();
     btn.style.display = '';
     form.remove();
@@ -217,7 +257,7 @@ function showCreateTemplateForm(section, btn) {
   });
 }
 
-async function loadTemplateExercises(templateId, container) {
+async function loadTemplateExercises(templateId, container, isStretchTemplate = false) {
   const exercises = await api(`/api/templates/${templateId}/exercises`);
   const allExercises = await api('/api/exercises');
   const archived = await api(`/api/templates/${templateId}/archived-exercises`);
@@ -270,14 +310,19 @@ async function loadTemplateExercises(templateId, container) {
             ${ex.linked_templates && ex.linked_templates.length > 0 ? `<div class="linked-indicator${ex.targets_independent ? ' targets-independent' : ''}">${ex.targets_independent ? CHAIN_SVG_BROKEN : CHAIN_SVG_LINKED} ${ex.targets_independent ? 'Targets independent' : 'Synced'}: ${ex.linked_templates.join(', ')}</div>` : ''}
           </div>
           <div class="template-exercise-actions">
-            <button class="btn btn-sm tmpl-ss-toggle${hasSS ? ' active' : ''}" data-deid="${ex.id}">SS</button>
-            ${adjacentToGroup ? `<button class="btn btn-sm tmpl-gs-toggle" data-deid="${ex.id}">GS</button>` : ''}
-            <button class="btn btn-sm tmpl-warmup-toggle${ex.is_warmup ? ' active' : ''}" data-deid="${ex.id}">Warm</button>
-            <button class="btn btn-sm tmpl-duration-toggle${ex.is_duration ? ' active' : ''}" data-deid="${ex.id}">Dur</button>
-            <button class="btn btn-sm tmpl-amrap-toggle${ex.is_amrap ? ' active' : ''}" data-deid="${ex.id}">F</button>
-            ${ex.is_amrap ? `<button class="btn btn-sm tmpl-amrap-last-toggle${ex.amrap_last_only ? ' active' : ''}" data-deid="${ex.id}">Last</button>` : ''}
-            <button class="btn btn-sm tmpl-assisted-toggle${ex.is_assisted ? ' active' : ''}" data-deid="${ex.id}" title="Assisted machine — records assistance weight, volume = bodyweight − assistance">Asst</button>
-            <button class="btn btn-sm btn-danger template-delete" data-deid="${ex.id}">&times;</button>
+            ${isStretchTemplate ? `
+              <button class="btn btn-sm tmpl-duration-toggle${ex.is_duration ? ' active' : ''}" data-deid="${ex.id}">Dur</button>
+              <button class="btn btn-sm btn-danger template-delete" data-deid="${ex.id}">&times;</button>
+            ` : `
+              <button class="btn btn-sm tmpl-ss-toggle${hasSS ? ' active' : ''}" data-deid="${ex.id}">SS</button>
+              ${adjacentToGroup ? `<button class="btn btn-sm tmpl-gs-toggle" data-deid="${ex.id}">GS</button>` : ''}
+              <button class="btn btn-sm tmpl-warmup-toggle${ex.is_warmup ? ' active' : ''}" data-deid="${ex.id}">Warm</button>
+              <button class="btn btn-sm tmpl-duration-toggle${ex.is_duration ? ' active' : ''}" data-deid="${ex.id}">Dur</button>
+              <button class="btn btn-sm tmpl-amrap-toggle${ex.is_amrap ? ' active' : ''}" data-deid="${ex.id}">F</button>
+              ${ex.is_amrap ? `<button class="btn btn-sm tmpl-amrap-last-toggle${ex.amrap_last_only ? ' active' : ''}" data-deid="${ex.id}">Last</button>` : ''}
+              <button class="btn btn-sm tmpl-assisted-toggle${ex.is_assisted ? ' active' : ''}" data-deid="${ex.id}" title="Assisted machine — records assistance weight, volume = bodyweight − assistance">Asst</button>
+              <button class="btn btn-sm btn-danger template-delete" data-deid="${ex.id}">&times;</button>
+            `}
           </div>
         </div>
       </div>
@@ -311,14 +356,20 @@ async function loadTemplateExercises(templateId, container) {
         ${allExercises.map((e) => `<option value="${e.name}">`).join('')}
       </datalist>
       <div class="add-exercise-row">
-        <input type="number" placeholder="Sets" value="4" id="add-sets-${templateId}" inputmode="numeric">
-        <input type="text" placeholder="Reps" value="10" id="add-reps-${templateId}">
+        <input type="number" placeholder="Sets" value="${isStretchTemplate ? 3 : 4}" id="add-sets-${templateId}" inputmode="numeric">
+        <input type="text" placeholder="${isStretchTemplate ? 'Reps / sec' : 'Reps'}" value="${isStretchTemplate ? '30' : '10'}" id="add-reps-${templateId}">
       </div>
+      ${isStretchTemplate ? `
+      <div class="add-toggles-row">
+        <button type="button" class="btn btn-sm tmpl-duration-toggle" id="add-duration-${templateId}">Duration</button>
+      </div>
+      ` : `
       <div class="add-toggles-row">
         <button type="button" class="btn btn-sm tmpl-warmup-toggle" id="add-warmup-${templateId}">Warmup</button>
         <button type="button" class="btn btn-sm tmpl-duration-toggle" id="add-duration-${templateId}">Duration</button>
         <button type="button" class="btn btn-sm tmpl-amrap-toggle" id="add-amrap-${templateId}">AMRAP</button>
       </div>
+      `}
       <label class="add-after-label">After:
         <select id="add-after-${templateId}">
           <option value="-1">At the top</option>
@@ -340,7 +391,7 @@ async function loadTemplateExercises(templateId, container) {
       const deId = parseInt(btn.dataset.deid, 10);
       const isActive = btn.classList.contains('active');
       await api(`/api/day-exercises/${deId}`, { method: 'PUT', body: { is_warmup: isActive ? 0 : 1 } });
-      loadTemplateExercises(templateId, container);
+      loadTemplateExercises(templateId, container, isStretchTemplate);
     });
   });
 
@@ -350,7 +401,7 @@ async function loadTemplateExercises(templateId, container) {
       const deId = parseInt(btn.dataset.deid, 10);
       const isActive = btn.classList.contains('active');
       await api(`/api/day-exercises/${deId}`, { method: 'PUT', body: { is_duration: isActive ? 0 : 1 } });
-      loadTemplateExercises(templateId, container);
+      loadTemplateExercises(templateId, container, isStretchTemplate);
     });
   });
 
@@ -362,7 +413,7 @@ async function loadTemplateExercises(templateId, container) {
       const updates = { is_amrap: isActive ? 0 : 1 };
       if (isActive) updates.amrap_last_only = 0;
       await api(`/api/day-exercises/${deId}`, { method: 'PUT', body: updates });
-      loadTemplateExercises(templateId, container);
+      loadTemplateExercises(templateId, container, isStretchTemplate);
     });
   });
 
@@ -372,7 +423,7 @@ async function loadTemplateExercises(templateId, container) {
       const deId = parseInt(btn.dataset.deid, 10);
       const isActive = btn.classList.contains('active');
       await api(`/api/day-exercises/${deId}`, { method: 'PUT', body: { amrap_last_only: isActive ? 0 : 1 } });
-      loadTemplateExercises(templateId, container);
+      loadTemplateExercises(templateId, container, isStretchTemplate);
     });
   });
 
@@ -382,7 +433,7 @@ async function loadTemplateExercises(templateId, container) {
       const deId = parseInt(btn.dataset.deid, 10);
       const isActive = btn.classList.contains('active');
       await api(`/api/day-exercises/${deId}`, { method: 'PUT', body: { is_assisted: isActive ? 0 : 1 } });
-      loadTemplateExercises(templateId, container);
+      loadTemplateExercises(templateId, container, isStretchTemplate);
     });
   });
 
@@ -455,7 +506,7 @@ async function loadTemplateExercises(templateId, container) {
           await api(`/api/day-exercises/${deId}`, { method: 'PUT', body: updates });
         }
         if (newName !== ex.exercise_name) {
-          loadTemplateExercises(templateId, container);
+          loadTemplateExercises(templateId, container, isStretchTemplate);
           return;
         }
         ex.exercise_name = newName;
@@ -484,7 +535,7 @@ async function loadTemplateExercises(templateId, container) {
         input.addEventListener('blur', handleBlur);
         input.addEventListener('keydown', (ev) => {
           if (ev.key === 'Enter') { saved = true; saveEdit(); }
-          if (ev.key === 'Escape') { saved = true; loadTemplateExercises(templateId, container); }
+          if (ev.key === 'Escape') { saved = true; loadTemplateExercises(templateId, container, isStretchTemplate); }
         });
         input.addEventListener('click', (ev) => ev.stopPropagation());
       });
@@ -565,7 +616,7 @@ async function loadTemplateExercises(templateId, container) {
       }
 
       await api(`/api/templates/${templateId}/reorder`, { method: 'PUT', body: { order } });
-      loadTemplateExercises(templateId, container);
+      loadTemplateExercises(templateId, container, isStretchTemplate);
     });
   });
 
@@ -610,7 +661,7 @@ async function loadTemplateExercises(templateId, container) {
       }
 
       await api(`/api/templates/${templateId}/reorder`, { method: 'PUT', body: { order } });
-      loadTemplateExercises(templateId, container);
+      loadTemplateExercises(templateId, container, isStretchTemplate);
     });
   });
 
@@ -648,7 +699,7 @@ async function loadTemplateExercises(templateId, container) {
           await api(`/api/day-exercises/${next.id}`, { method: 'PUT', body: { superset_group: groupNum } });
         }
       }
-      loadTemplateExercises(templateId, container);
+      loadTemplateExercises(templateId, container, isStretchTemplate);
     });
   });
 
@@ -666,7 +717,7 @@ async function loadTemplateExercises(templateId, container) {
       if (groupNum != null) {
         await api(`/api/day-exercises/${deId}`, { method: 'PUT', body: { superset_group: groupNum } });
       }
-      loadTemplateExercises(templateId, container);
+      loadTemplateExercises(templateId, container, isStretchTemplate);
     });
   });
 
@@ -674,7 +725,7 @@ async function loadTemplateExercises(templateId, container) {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       await api(`/api/day-exercises/${btn.dataset.deid}`, { method: 'DELETE' });
-      loadTemplateExercises(templateId, container);
+      loadTemplateExercises(templateId, container, isStretchTemplate);
     });
   });
 
@@ -682,7 +733,7 @@ async function loadTemplateExercises(templateId, container) {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       await api(`/api/day-exercises/${btn.dataset.deid}/restore`, { method: 'POST' });
-      loadTemplateExercises(templateId, container);
+      loadTemplateExercises(templateId, container, isStretchTemplate);
     });
   });
 
@@ -693,30 +744,26 @@ async function loadTemplateExercises(templateId, container) {
       const name = row.querySelector('.archived-name').textContent.trim();
       if (!confirm(`Permanently delete "${name}" and all of its workout history?\n\nThis cannot be undone.`)) return;
       await api(`/api/day-exercises/${btn.dataset.deid}/permanent`, { method: 'DELETE' });
-      loadTemplateExercises(templateId, container);
+      loadTemplateExercises(templateId, container, isStretchTemplate);
     });
   });
 
-  document.getElementById(`add-warmup-${templateId}`).addEventListener('click', (e) => {
-    e.preventDefault();
-    e.currentTarget.classList.toggle('active');
-  });
+  const addWarmupBtn = document.getElementById(`add-warmup-${templateId}`);
+  if (addWarmupBtn) addWarmupBtn.addEventListener('click', (e) => { e.preventDefault(); e.currentTarget.classList.toggle('active'); });
   document.getElementById(`add-duration-${templateId}`).addEventListener('click', (e) => {
     e.preventDefault();
     e.currentTarget.classList.toggle('active');
   });
-  document.getElementById(`add-amrap-${templateId}`).addEventListener('click', (e) => {
-    e.preventDefault();
-    e.currentTarget.classList.toggle('active');
-  });
+  const addAmrapBtn = document.getElementById(`add-amrap-${templateId}`);
+  if (addAmrapBtn) addAmrapBtn.addEventListener('click', (e) => { e.preventDefault(); e.currentTarget.classList.toggle('active'); });
 
   document.getElementById(`add-btn-${templateId}`).addEventListener('click', async () => {
     const name = document.getElementById(`add-name-${templateId}`).value.trim();
     const sets = parseInt(document.getElementById(`add-sets-${templateId}`).value, 10) || 3;
     const reps = document.getElementById(`add-reps-${templateId}`).value.trim() || '10';
-    const isWarmup = document.getElementById(`add-warmup-${templateId}`).classList.contains('active');
+    const isWarmup = addWarmupBtn ? addWarmupBtn.classList.contains('active') : false;
     const isDuration = document.getElementById(`add-duration-${templateId}`).classList.contains('active');
-    const isAmrap = document.getElementById(`add-amrap-${templateId}`).classList.contains('active');
+    const isAmrap = addAmrapBtn ? addAmrapBtn.classList.contains('active') : false;
     const afterSortOrder = parseInt(document.getElementById(`add-after-${templateId}`).value, 10);
     if (!name) return;
 
@@ -725,10 +772,10 @@ async function loadTemplateExercises(templateId, container) {
       body: { name, target_sets: sets, target_reps: reps, is_warmup: isWarmup, is_duration: isDuration, is_amrap: isAmrap, after_sort_order: afterSortOrder },
     });
     document.getElementById(`add-name-${templateId}`).value = '';
-    document.getElementById(`add-warmup-${templateId}`).classList.remove('active');
+    if (addWarmupBtn) addWarmupBtn.classList.remove('active');
     document.getElementById(`add-duration-${templateId}`).classList.remove('active');
-    document.getElementById(`add-amrap-${templateId}`).classList.remove('active');
-    loadTemplateExercises(templateId, container);
+    if (addAmrapBtn) addAmrapBtn.classList.remove('active');
+    loadTemplateExercises(templateId, container, isStretchTemplate);
   });
 
   document.getElementById(`delete-template-${templateId}`).addEventListener('click', async () => {

@@ -279,6 +279,13 @@ function initSchema() {
     db.prepare('UPDATE day_exercises SET is_assisted = 0').run();
   });
 
+  // Migration: add is_stretch flag to days (stretch templates — simplified rendering, excluded from progress)
+  try {
+    db.prepare("SELECT is_stretch FROM days LIMIT 1").get();
+  } catch (e) {
+    db.exec("ALTER TABLE days ADD COLUMN is_stretch INTEGER NOT NULL DEFAULT 0");
+  }
+
   // Migration: add use_defaults flag to meal_templates (one-tap confirm vs manual entry)
   try {
     db.prepare("SELECT use_defaults FROM meal_templates LIMIT 1").get();
@@ -409,8 +416,8 @@ function getAllTemplates() {
   return db.prepare('SELECT * FROM days ORDER BY name').all();
 }
 
-function createTemplate(name) {
-  const info = db.prepare('INSERT INTO days (day_index, name) VALUES (-1, ?)').run(name);
+function createTemplate(name, isStretch = false) {
+  const info = db.prepare('INSERT INTO days (day_index, name, is_stretch) VALUES (-1, ?, ?)').run(name, isStretch ? 1 : 0);
   return info.lastInsertRowid;
 }
 
@@ -458,7 +465,7 @@ function duplicateTemplate(id, name) {
   `).all(id);
 
   const txn = db.transaction(() => {
-    const info = db.prepare('INSERT INTO days (day_index, name) VALUES (-1, ?)').run(finalName);
+    const info = db.prepare('INSERT INTO days (day_index, name, is_stretch) VALUES (-1, ?, ?)').run(finalName, template.is_stretch || 0);
     const newTemplateId = info.lastInsertRowid;
 
     const insertExercise = db.prepare(`
@@ -494,8 +501,16 @@ function duplicateTemplate(id, name) {
   return { id: newTemplateId, name: finalName };
 }
 
-function updateTemplate(id, name) {
-  db.prepare('UPDATE days SET name = ? WHERE id = ?').run(name, id);
+function updateTemplate(id, fields) {
+  if (typeof fields === 'string') fields = { name: fields };
+  const allowed = ['name', 'is_stretch'];
+  const updates = [], values = [];
+  for (const [key, val] of Object.entries(fields)) {
+    if (allowed.includes(key)) { updates.push(`${key} = ?`); values.push(val); }
+  }
+  if (updates.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE days SET ${updates.join(', ')} WHERE id = ?`).run(...values);
 }
 
 function deleteTemplate(id) {
@@ -523,7 +538,7 @@ function deleteTemplate(id) {
 
 function getSchedule() {
   return db.prepare(`
-    SELECT s.*, d.name as template_name
+    SELECT s.*, d.name as template_name, d.is_stretch as template_is_stretch
     FROM schedule s
     JOIN days d ON d.id = s.template_id
     ORDER BY s.day_index, s.sort_order
@@ -550,7 +565,7 @@ function getScheduleForDate(date) {
   const jsDay = d.getDay(); // 0=Sun
   const dayIndex = jsDay === 0 ? 6 : jsDay - 1; // convert to 0=Mon
   return db.prepare(`
-    SELECT s.id as schedule_id, s.sort_order, d.id as template_id, d.name as template_name
+    SELECT s.id as schedule_id, s.sort_order, d.id as template_id, d.name as template_name, d.is_stretch
     FROM schedule s
     JOIN days d ON d.id = s.template_id
     WHERE s.day_index = ?
@@ -753,6 +768,7 @@ function getFullWorkoutsForDate(date) {
       ...w,
       template_id: w.day_id,
       template_name: day ? day.name : '',
+      is_stretch: day ? (day.is_stretch || 0) : 0,
       exercises: getWorkoutFull(w.id)
     };
   });
@@ -771,16 +787,20 @@ function initWorkoutFromTemplate(date, templateId) {
   if (existing.length > 0) return workout;
 
   const templateExercises = getDayExercises(templateId);
+  const templateRow = db.prepare('SELECT is_stretch FROM days WHERE id = ?').get(templateId);
+  const isStretch = templateRow && templateRow.is_stretch;
 
-  // Get previous session's data for pre-fill.
+  // Get previous session's data for pre-fill (not applicable for stretch templates).
   // Warmup/working scoping prevents cross-role bleed. For targets_independent slots,
   // also scope to same template so differently-programmed exercises don't share history.
   let prevDataMap = {};
-  for (const te of templateExercises) {
-    const scopedDayId = te.targets_independent ? templateId : null;
-    const recent = getMostRecentExerciseData(te.exercise_id, date, te.is_warmup, scopedDayId);
-    if (recent && recent.sets && recent.sets.length > 0) {
-      prevDataMap[te.id] = recent.sets;
+  if (!isStretch) {
+    for (const te of templateExercises) {
+      const scopedDayId = te.targets_independent ? templateId : null;
+      const recent = getMostRecentExerciseData(te.exercise_id, date, te.is_warmup, scopedDayId);
+      if (recent && recent.sets && recent.sets.length > 0) {
+        prevDataMap[te.id] = recent.sets;
+      }
     }
   }
 
@@ -942,10 +962,13 @@ function reorderWorkoutExercises(workoutId, orderedIds) {
 // --- Exercise linking helpers ---
 
 function syncLinkedExercises(dayExerciseId, fields) {
-  const de = db.prepare('SELECT exercise_id, day_id, is_warmup, targets_independent FROM day_exercises WHERE id = ?').get(dayExerciseId);
-  if (!de) return;
+  const de = db.prepare(`
+    SELECT de.exercise_id, de.day_id, de.is_warmup, de.targets_independent, d.is_stretch
+    FROM day_exercises de JOIN days d ON d.id = de.day_id WHERE de.id = ?
+  `).get(dayExerciseId);
+  if (!de || de.is_stretch) return; // Don't sync stretch template exercises
 
-  const baseWhere = 'exercise_id = ? AND id != ? AND day_id != ? AND is_warmup = ? AND archived = 0';
+  const baseWhere = 'exercise_id = ? AND id != ? AND day_id != ? AND is_warmup = ? AND archived = 0 AND day_id NOT IN (SELECT id FROM days WHERE is_stretch = 1)';
   const baseParams = [de.exercise_id, dayExerciseId, de.day_id, de.is_warmup];
 
   // targets_independent is an all-or-nothing property: every slot of the same exercise
@@ -1123,6 +1146,7 @@ function getPerformedExercises() {
     SELECT effective.id, effective.name, MAX(w.date) as last_date
     FROM workout_exercises we
     JOIN day_exercises de ON de.id = we.day_exercise_id AND de.is_warmup = 0
+    JOIN days d ON d.id = de.day_id AND d.is_stretch = 0
     JOIN workout_sets ws ON ws.workout_exercise_id = we.id AND ws.completed = 1
     JOIN exercises effective ON effective.id = COALESCE(we.override_exercise_id, de.exercise_id)
     JOIN workouts w ON w.id = we.workout_id
@@ -1145,6 +1169,7 @@ function getExerciseTrend(exerciseId) {
     FROM workout_exercises we
     JOIN workouts w ON w.id = we.workout_id
     JOIN day_exercises de ON de.id = we.day_exercise_id
+    JOIN days d ON d.id = de.day_id AND d.is_stretch = 0
     JOIN workout_sets ws ON ws.workout_exercise_id = we.id
     WHERE COALESCE(we.override_exercise_id, de.exercise_id) = ?
       AND de.is_warmup = 0

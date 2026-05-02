@@ -20,6 +20,7 @@ export const state = {
   progressExerciseId: null,
   progressExerciseName: '',
   bodyHistoryExpanded: false,
+  activeTemplateTab: 'workout',
 };
 
 export function invalidateScheduleCache() {
