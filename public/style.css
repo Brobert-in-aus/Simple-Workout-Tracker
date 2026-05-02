@@ -328,6 +328,7 @@ html, body {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  margin-left: auto;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .stretch-done-btn.done {

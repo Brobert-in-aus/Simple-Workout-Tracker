@@ -702,7 +702,6 @@ function createStretchCard(ex, workout) {
     <div class="exercise-header">
       <span class="exercise-name">${ex.exercise_name}<span class="stretch-badge">Stretch</span></span>
       <span class="exercise-target">${targetDisplay}</span>
-      <button class="stretch-done-btn${isDone ? ' done' : ''}" title="Mark stretch done">&#10003;</button>
       <div class="reorder-btns">
         <button class="reorder-btn move-up" data-weid="${ex.id}">&uarr;</button>
         <button class="reorder-btn move-down" data-weid="${ex.id}">&darr;</button>
@@ -741,6 +740,7 @@ function createStretchCard(ex, workout) {
       <div class="set-actions">
         <button class="btn btn-sm btn-outline add-set-btn" data-weid="${ex.id}" data-target-reps="${targetRepsNum}">+ Set</button>
         ${ex.sets.length > 1 ? `<button class="btn btn-sm btn-outline remove-set-btn" data-weid="${ex.id}">&minus; Set</button>` : ''}
+        <button class="stretch-done-btn${isDone ? ' done' : ''}" title="Mark stretch done">&#10003;</button>
       </div>
     `;
   }
