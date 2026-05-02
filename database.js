@@ -837,7 +837,7 @@ function initWorkoutFromTemplate(date, templateId) {
         const weight = isDuration ? null : (prev ? prev.weight : null);
         const reps = isDuration ? null : (prev && prev.reps != null ? prev.reps : (isNaN(targetRepsNum) ? null : targetRepsNum));
         const tReps = isDuration ? null : (isNaN(targetRepsNum) ? null : targetRepsNum);
-        const duration = prev ? prev.duration_seconds : null;
+        const duration = isDuration ? (prev ? prev.duration_seconds : (isNaN(targetRepsNum) ? null : targetRepsNum)) : null;
         const setIsAmrap = te.is_amrap ? (te.amrap_last_only ? (s === numSets ? 1 : 0) : 1) : 0;
         insertWs.run(weInfo.lastInsertRowid, s, weight, reps, tReps, duration, setIsAmrap);
       }

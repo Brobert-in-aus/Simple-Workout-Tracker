@@ -887,6 +887,8 @@ function addSet(ex, card) {
     if (currentRows.length > 0) {
       const lastDur = currentRows[currentRows.length - 1].querySelector('.duration-input');
       if (lastDur && lastDur.value) prevDuration = lastDur.value;
+    } else {
+      prevDuration = targetRepsNum || '';
     }
     row.dataset.duration = '1';
     row.innerHTML = isStretch ? `

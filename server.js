@@ -536,7 +536,7 @@ app.get('/api/workout/:date', (req, res) => {
           weight: null,
           reps: null,
           target_reps: parseInt(te.target_reps) || null,
-          duration_seconds: null,
+          duration_seconds: te.is_duration ? (parseInt(te.target_reps) || null) : null,
           completed: 0,
           is_amrap: te.is_amrap ? (te.amrap_last_only ? (i === te.target_sets - 1 ? 1 : 0) : 1) : 0,
         })),
