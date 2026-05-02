@@ -45,10 +45,15 @@ export async function loadTemplate() {
     chipsContainer.className = 'schedule-chips';
 
     const assigned = dayScheduleMap[i] || [];
+    let dragSrcId = null;
+
     for (const entry of assigned) {
       const chip = document.createElement('span');
       chip.className = 'schedule-chip';
+      chip.draggable = true;
+      chip.dataset.scheduleId = String(entry.id);
       chip.innerHTML = `${entry.template_name} <button class="schedule-chip-remove" data-schedule-id="${entry.id}">&times;</button>`;
+
       chip.querySelector('.schedule-chip-remove').addEventListener('click', async (e) => {
         e.stopPropagation();
         await api(`/api/schedule/${entry.id}`, { method: 'DELETE' });
@@ -56,6 +61,48 @@ export async function loadTemplate() {
         loadTemplate();
         loadWeek();
       });
+
+      chip.addEventListener('dragstart', (e) => {
+        dragSrcId = entry.id;
+        e.dataTransfer.effectAllowed = 'move';
+        chip.classList.add('dragging');
+      });
+      chip.addEventListener('dragend', () => {
+        chip.classList.remove('dragging');
+        chipsContainer.querySelectorAll('.schedule-chip').forEach((c) => c.classList.remove('drag-over-before', 'drag-over-after'));
+        dragSrcId = null;
+      });
+      chip.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (dragSrcId === entry.id) return;
+        chipsContainer.querySelectorAll('.schedule-chip').forEach((c) => c.classList.remove('drag-over-before', 'drag-over-after'));
+        const rect = chip.getBoundingClientRect();
+        chip.classList.add(e.clientX < rect.left + rect.width / 2 ? 'drag-over-before' : 'drag-over-after');
+      });
+      chip.addEventListener('dragleave', () => {
+        chip.classList.remove('drag-over-before', 'drag-over-after');
+      });
+      chip.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        chip.classList.remove('drag-over-before', 'drag-over-after');
+        if (dragSrcId == null || dragSrcId === entry.id) return;
+
+        const allChips = [...chipsContainer.querySelectorAll('.schedule-chip[data-schedule-id]')];
+        const ids = allChips.map((c) => parseInt(c.dataset.scheduleId));
+        const fromIdx = ids.indexOf(dragSrcId);
+        ids.splice(fromIdx, 1);
+
+        const rect = chip.getBoundingClientRect();
+        const targetIdx = ids.indexOf(entry.id);
+        const insertAt = e.clientX < rect.left + rect.width / 2 ? targetIdx : targetIdx + 1;
+        ids.splice(insertAt, 0, dragSrcId);
+
+        await api('/api/schedule/reorder', { method: 'PUT', body: { day_index: i, ids } });
+        invalidateScheduleCache();
+        loadTemplate();
+        loadWeek();
+      });
+
       chipsContainer.appendChild(chip);
     }
 

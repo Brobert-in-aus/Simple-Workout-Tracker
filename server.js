@@ -223,6 +223,13 @@ app.delete('/api/schedule/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+app.put('/api/schedule/reorder', (req, res) => {
+  const { day_index, ids } = req.body;
+  if (day_index == null || !Array.isArray(ids)) return res.status(400).json({ error: 'day_index and ids required' });
+  db.reorderScheduleEntries(day_index, ids);
+  res.json({ ok: true });
+});
+
 // --- Template exercise API (uses template_id = days.id) ---
 
 app.get('/api/templates/:id/exercises', (req, res) => {

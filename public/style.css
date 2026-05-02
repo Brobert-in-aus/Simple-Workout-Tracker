@@ -1430,6 +1430,16 @@ html, body {
   font-size: 12px;
   font-weight: 600;
   color: var(--accent);
+  cursor: grab;
+}
+.schedule-chip.dragging {
+  opacity: 0.4;
+}
+.schedule-chip.drag-over-before {
+  border-left: 2px solid var(--accent);
+}
+.schedule-chip.drag-over-after {
+  border-right: 2px solid var(--accent);
 }
 
 .schedule-chip-remove {

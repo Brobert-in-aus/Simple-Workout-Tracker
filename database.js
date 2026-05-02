@@ -560,6 +560,13 @@ function removeScheduleEntry(id) {
   db.prepare('DELETE FROM schedule WHERE id = ?').run(id);
 }
 
+function reorderScheduleEntries(dayIndex, orderedIds) {
+  const update = db.prepare('UPDATE schedule SET sort_order = ? WHERE id = ? AND day_index = ?');
+  db.transaction(() => {
+    orderedIds.forEach((id, i) => update.run(i, id, dayIndex));
+  })();
+}
+
 function getScheduleForDate(date) {
   const d = new Date(date + 'T00:00:00');
   const jsDay = d.getDay(); // 0=Sun
@@ -1987,6 +1994,7 @@ module.exports = {
   getSchedule,
   addScheduleEntry,
   removeScheduleEntry,
+  reorderScheduleEntries,
   getScheduleForDate,
   isWorkoutDayForNutrition,
   // Legacy day helpers
