@@ -811,18 +811,20 @@ async function saveExercise(ex) {
     } else {
       const weightInput = row.querySelector('.weight-input');
       const repsInput = row.querySelector('.reps-input');
-      if (!weightInput) return;
-      const weight = weightInput.value !== '' ? parseFloat(weightInput.value) : null;
-      const reps = repsInput.value !== '' ? parseInt(repsInput.value, 10) : null;
+      if (!weightInput && !repsInput) return;
+      const weight = weightInput ? (weightInput.value !== '' ? parseFloat(weightInput.value) : null) : null;
+      const reps = repsInput ? (repsInput.value !== '' ? parseInt(repsInput.value, 10) : null) : null;
       const amrapBtn = row.querySelector('.amrap-toggle');
       const isAmrap = amrapBtn ? amrapBtn.classList.contains('active') : false;
 
-      if (!isAmrap && reps != null && targetRepsNum != null && reps < targetRepsNum) {
-        weightInput.classList.add('partial');
-        repsInput.classList.add('partial');
-      } else {
-        weightInput.classList.remove('partial');
-        repsInput.classList.remove('partial');
+      if (weightInput && repsInput) {
+        if (!isAmrap && reps != null && targetRepsNum != null && reps < targetRepsNum) {
+          weightInput.classList.add('partial');
+          repsInput.classList.add('partial');
+        } else {
+          weightInput.classList.remove('partial');
+          repsInput.classList.remove('partial');
+        }
       }
 
       sets.push({ weight, reps, target_reps: isAmrap ? null : targetRepsNum, completed, is_amrap: isAmrap ? 1 : 0 });
