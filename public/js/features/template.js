@@ -178,11 +178,15 @@ export async function loadTemplate() {
       chevron.className = 'template-chevron';
       chevron.innerHTML = '&rsaquo;';
 
+      const expandZone = document.createElement('div');
+      expandZone.className = 'tmpl-expand-zone';
+
       const duplicateBtn = document.createElement('button');
       duplicateBtn.className = 'btn btn-sm btn-outline template-duplicate-btn';
       duplicateBtn.textContent = 'Duplicate';
       duplicateBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
+        if (!confirm(`Duplicate "${tmpl.name}"?`)) return;
         const result = await api(`/api/templates/${tmpl.id}/duplicate`, { method: 'POST', body: {} });
         invalidateTemplatesCache();
         invalidateScheduleCache();
@@ -196,14 +200,16 @@ export async function loadTemplate() {
       typeToggleBtn.textContent = isStretch ? 'Make Workout' : 'Make Stretch';
       typeToggleBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
+        const label = isStretch ? 'workout' : 'stretch';
+        if (!confirm(`Convert "${tmpl.name}" to a ${label} template?`)) return;
         await api(`/api/templates/${tmpl.id}`, { method: 'PUT', body: { is_stretch: isStretch ? 0 : 1 } });
         invalidateTemplatesCache();
-        // Switch tab to follow the moved template
         state.activeTemplateTab = isStretch ? 'workout' : 'stretch';
         loadTemplate();
       });
 
       header.appendChild(nameInput);
+      header.appendChild(expandZone);
       header.appendChild(typeToggleBtn);
       header.appendChild(duplicateBtn);
       header.appendChild(chevron);
