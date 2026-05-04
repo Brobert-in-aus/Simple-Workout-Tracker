@@ -1920,10 +1920,14 @@ function getNutritionSummaryForRange(startDate, endDate) {
   const withLogs = days.filter(day => day.has_logs);
   const withHealth = days.filter(day => day.has_health_metrics);
   const withBalance = days.filter(day => day.has_logs && typeof day.energy_balance_kcal === 'number');
+  const withMeasuredBalance = days.filter(day => day.has_logs && day.health_source_direct && typeof day.energy_balance_kcal === 'number');
   const average = (rows, key) => rows.length === 0
     ? null
     : round1(rows.reduce((sum, row) => sum + (row[key] ?? 0), 0) / rows.length);
   const balanceAverage = average(withBalance, 'energy_balance_kcal');
+  const totalMeasuredDeficit = withMeasuredBalance.length === 0
+    ? null
+    : Math.round(withMeasuredBalance.reduce((sum, day) => sum + day.energy_balance_kcal, 0));
 
   return {
     start_date: startDate,
@@ -1943,6 +1947,8 @@ function getNutritionSummaryForRange(startDate, endDate) {
       avg_tdee_kcal: average(withHealth, 'tdee_kcal'),
       avg_energy_balance_kcal: balanceAverage,
       avg_energy_direction: balanceAverage == null ? null : balanceAverage < 0 ? 'deficit' : balanceAverage > 0 ? 'surplus' : 'balance',
+      total_measured_deficit_kcal: totalMeasuredDeficit,
+      total_measured_deficit_days: withMeasuredBalance.length,
       calorie_target_hit_days: days.filter(day => day.calorie_target_hit).length,
       protein_target_hit_days: days.filter(day => day.protein_target_hit).length,
       energy_target_hit_days: days.filter(day => day.energy_target_hit).length,

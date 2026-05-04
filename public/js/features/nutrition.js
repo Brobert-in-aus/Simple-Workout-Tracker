@@ -215,6 +215,12 @@ function formatAverageEnergyBalance(value) {
   return `${value < 0 ? 'Deficit' : 'Surplus'} ${Math.abs(Math.round(value))} kcal`;
 }
 
+function formatTotalMeasuredDeficit(value) {
+  if (value == null) return '—';
+  if (value === 0) return '0 kcal';
+  return `${value < 0 ? 'Deficit' : 'Surplus'} ${Math.abs(value).toLocaleString()} kcal`;
+}
+
 function summaryHeroHTML(data) {
   const summary = data.summary;
   if (summary.display_days === 0) {
@@ -320,6 +326,7 @@ function renderSummaryContent(el) {
       ${summaryStatCardHTML('Avg Intake', summary.avg_calories_kcal == null ? '—' : `${Math.round(summary.avg_calories_kcal)} kcal`, summary.logged_days > 0 ? `${summary.logged_days} logged day${summary.logged_days === 1 ? '' : 's'}` : 'No logged meals')}
       ${summaryStatCardHTML('Avg Protein', summary.avg_protein_g == null ? '—' : `${Math.round(summary.avg_protein_g)} g`, `${summary.protein_target_hit_days} day${summary.protein_target_hit_days === 1 ? '' : 's'} on target`)}
       ${summaryStatCardHTML('Avg Balance', formatAverageEnergyBalance(summary.avg_energy_balance_kcal), `${summary.energy_target_hit_days} day${summary.energy_target_hit_days === 1 ? '' : 's'} on target`)}
+      ${summaryStatCardHTML('Total Deficit', formatTotalMeasuredDeficit(summary.total_measured_deficit_kcal), summary.total_measured_deficit_days === 0 ? 'No days with measured TDEE + intake' : `${summary.total_measured_deficit_days} day${summary.total_measured_deficit_days === 1 ? '' : 's'} with measured TDEE`)}
       ${summaryStatCardHTML('Apple Health', `${summary.direct_health_days} direct / ${summary.estimated_health_days} estimated`, summary.avg_tdee_kcal == null ? 'No TDEE data' : `Avg TDEE ${Math.round(summary.avg_tdee_kcal)} kcal`)}
     </div>
     <div class="nutrition-summary-charts">
