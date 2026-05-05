@@ -178,9 +178,6 @@ export async function loadTemplate() {
       chevron.className = 'template-chevron';
       chevron.innerHTML = '&rsaquo;';
 
-      const expandZone = document.createElement('div');
-      expandZone.className = 'tmpl-expand-zone';
-
       const duplicateBtn = document.createElement('button');
       duplicateBtn.className = 'btn btn-sm btn-outline template-duplicate-btn';
       duplicateBtn.textContent = 'Duplicate';
@@ -209,7 +206,6 @@ export async function loadTemplate() {
       });
 
       header.appendChild(nameInput);
-      header.appendChild(expandZone);
       header.appendChild(typeToggleBtn);
       header.appendChild(duplicateBtn);
       header.appendChild(chevron);

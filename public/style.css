@@ -744,7 +744,7 @@ html, body {
 }
 
 .template-day-name-input {
-  flex: 0 1 auto;
+  flex: 1;
   background: var(--bg-input);
   border: 1px solid var(--border);
   color: var(--text);
@@ -753,13 +753,6 @@ html, body {
   font-size: 14px;
   font-weight: 600;
   font-family: inherit;
-}
-
-.tmpl-expand-zone {
-  flex: 1;
-  align-self: stretch;
-  min-width: 16px;
-  cursor: pointer;
 }
 
 .template-day-name-input:focus {
