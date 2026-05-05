@@ -196,7 +196,7 @@ export async function loadTemplate() {
       });
 
       const typeToggleBtn = document.createElement('button');
-      typeToggleBtn.className = 'btn btn-sm tmpl-type-toggle';
+      typeToggleBtn.className = 'btn btn-sm btn-outline tmpl-type-toggle';
       typeToggleBtn.title = isStretch ? 'Convert to workout template' : 'Convert to stretch template';
       typeToggleBtn.textContent = isStretch ? 'Make Workout' : 'Make Stretch';
       typeToggleBtn.addEventListener('click', async (e) => {
