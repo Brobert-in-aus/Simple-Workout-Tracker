@@ -152,7 +152,11 @@ export async function loadTemplate() {
 
       const header = document.createElement('div');
       header.className = 'template-day-header';
-      header.style.cursor = 'pointer';
+      const headerMain = document.createElement('div');
+      headerMain.className = 'tmpl-header-main';
+
+      const headerActions = document.createElement('div');
+      headerActions.className = 'tmpl-header-actions';
 
       const nameInput = document.createElement('input');
       nameInput.type = 'text';
@@ -205,15 +209,17 @@ export async function loadTemplate() {
         loadTemplate();
       });
 
-      header.appendChild(nameInput);
-      header.appendChild(typeToggleBtn);
-      header.appendChild(duplicateBtn);
-      header.appendChild(chevron);
+      headerMain.appendChild(nameInput);
+      headerMain.appendChild(chevron);
+      headerActions.appendChild(typeToggleBtn);
+      headerActions.appendChild(duplicateBtn);
+      header.appendChild(headerMain);
+      header.appendChild(headerActions);
 
       const body = document.createElement('div');
       body.className = 'template-day-body';
 
-      header.addEventListener('click', () => {
+      headerMain.addEventListener('click', () => {
         body.classList.toggle('open');
         if (body.classList.contains('open')) {
           loadTemplateExercises(tmpl.id, body, isStretch);
