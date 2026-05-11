@@ -509,19 +509,17 @@ async function loadTemplateExercises(templateId, container, isStretchTemplate = 
       info.innerHTML = `
           <div class="inline-edit-form">
             <input type="text" class="inline-edit-name" value="${ex.exercise_name}" placeholder="Name" autocomplete="off">
-            <div class="inline-edit-row">
+            <div class="inline-edit-row inline-targets-row">
               <input type="number" class="inline-edit-sets" value="${ex.target_sets}" placeholder="Sets" inputmode="numeric">
               <span class="inline-edit-x">&times;</span>
               <input type="text" class="inline-edit-reps" value="${ex.target_reps}" placeholder="Reps">
-            </div>
-            ${(!isStretchTemplate && !ex.is_duration && !ex.is_warmup) ? `
-              <div class="inline-edit-row inline-warmup-row">
+              ${(!isStretchTemplate && !ex.is_duration && !ex.is_warmup) ? `
                 <span class="inline-edit-label">WU</span>
                 <input type="number" class="inline-edit-warmup-weight" value="${ex.warmup_set_weight != null ? ex.warmup_set_weight : ''}" placeholder="kg" step="0.5" inputmode="decimal">
                 <span class="inline-edit-x">&times;</span>
                 <input type="number" class="inline-edit-warmup-reps" value="${ex.warmup_set_reps != null ? ex.warmup_set_reps : ''}" placeholder="reps" inputmode="numeric">
-              </div>
-            ` : ''}
+              ` : ''}
+            </div>
             ${isLinked ? `<button type="button" class="sync-targets-btn ${ex.targets_independent ? 'is-independent' : 'is-synced'}">${ex.targets_independent ? CHAIN_SVG_BROKEN : CHAIN_SVG_LINKED}<span class="sync-targets-label">${ex.targets_independent ? 'Targets independent' : 'Targets synced'}</span></button>` : ''}
             <input type="text" class="inline-edit-note" value="${(ex.notes || '').replace(/"/g, '&quot;')}" placeholder="Note (shown during workout)">
           </div>
