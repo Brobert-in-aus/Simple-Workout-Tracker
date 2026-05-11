@@ -846,6 +846,10 @@ app.get('/api/trends/frequency', (req, res) => {
   res.json(db.getAllWorkoutSessionDates());
 });
 
+app.get('/api/trends/volume', (req, res) => {
+  res.json(db.getTrainingVolumeSummary());
+});
+
 // --- Nutrition: Meal Templates API ---
 
 app.get('/api/nutrition/templates', (req, res) => {

@@ -106,6 +106,13 @@ function buildHealthImportDetailRows(rows) {
   `;
 }
 
+function formatVolumeKg(value) {
+  const rounded = Math.round(value || 0);
+  if (rounded >= 1000000) return `${(rounded / 1000000).toFixed(1)}M`;
+  if (rounded >= 1000) return `${(rounded / 1000).toFixed(1)}k`;
+  return String(rounded);
+}
+
 function renderHealthImportModal() {
   const preview = healthImportState.preview;
   const errorHtml = healthImportState.error
@@ -615,20 +622,76 @@ async function renderWorkoutsSection(container) {
   if (!state.workoutDatesCache) {
     state.workoutDatesCache = await api('/api/trends/frequency');
   }
+  if (!state.trainingVolumeCache) {
+    state.trainingVolumeCache = await api('/api/trends/volume');
+  }
   const backupStatus = await getBackupStatus();
   const filtered = filterByRange(state.workoutDatesCache, state.progressTimeRange);
+  const volumeSummary = state.trainingVolumeCache;
+  const filteredWeeks = filterByRange(
+    volumeSummary.weeks.map((week) => ({ ...week, date: week.week_start })),
+    state.progressTimeRange
+  );
+  const filteredSessions = filterByRange(volumeSummary.sessions, state.progressTimeRange);
+  const filteredTemplateSessions = new Map();
+  for (const session of filteredSessions) {
+    if (!filteredTemplateSessions.has(session.template_id)) filteredTemplateSessions.set(session.template_id, []);
+    filteredTemplateSessions.get(session.template_id).push(session);
+  }
+  const templateVolumes = volumeSummary.templates
+    .map((template) => {
+      const sessions = filteredTemplateSessions.get(template.template_id) || [];
+      const totalVolume = sessions.reduce((sum, session) => sum + session.total_volume, 0);
+      const latest = sessions[sessions.length - 1] || null;
+      return {
+        template_id: template.template_id,
+        template_name: template.template_name,
+        total_volume: totalVolume,
+        session_count: sessions.length,
+        avg_volume: sessions.length > 0 ? Math.round(totalVolume / sessions.length) : 0,
+        latest_date: latest ? latest.date : null,
+        latest_volume: latest ? latest.total_volume : 0,
+      };
+    })
+    .filter((template) => template.session_count > 0)
+    .sort((a, b) => b.total_volume - a.total_volume || a.template_name.localeCompare(b.template_name));
+  const totalVolume = filteredWeeks.reduce((sum, week) => sum + week.total_volume, 0);
+  const volumeBounds = getRangeBounds(
+    state.progressTimeRange,
+    filteredWeeks.map((week) => week.week_start)
+  );
   const total = filtered.length;
   const bounds = getRangeBounds(state.progressTimeRange, filtered);
 
   const weeks = groupByWeek(filtered);
   const weeksTrained = weeks.length;
   const avgPerWeek = bounds ? (total / countWeeksInRange(bounds.start, bounds.end)).toFixed(1) : '-';
+  const avgVolumePerWeek = volumeBounds ? Math.round(totalVolume / countWeeksInRange(volumeBounds.start, volumeBounds.end)) : 0;
 
   const barData = weeks.slice(-52).map(({ weekStart, items }) => ({
     label: formatDateShort(weekStart),
     value: items.length,
     weekStart,
   }));
+  const volumeBarData = filteredWeeks.slice(-52).map((week) => ({
+    label: formatDateShort(week.week_start),
+    value: week.total_volume,
+    weekStart: week.week_start,
+  }));
+  const templateList = templateVolumes.length > 0
+    ? templateVolumes.slice(0, 8).map((template) => `
+      <div class="template-volume-row">
+        <div>
+          <div class="template-volume-name">${escapeHtml(template.template_name)}</div>
+          <div class="template-volume-meta">${template.session_count} session${template.session_count === 1 ? '' : 's'}${template.latest_date ? ` · latest ${formatDateShort(template.latest_date)}` : ''}</div>
+        </div>
+        <div class="template-volume-numbers">
+          <strong>${formatVolumeKg(template.total_volume)}</strong>
+          <span>avg ${formatVolumeKg(template.avg_volume)}</span>
+        </div>
+      </div>
+    `).join('')
+    : '<div class="week-detail-empty">No completed volume in this range</div>';
   const backupLabel = backupStatus.has_backup
     ? `${backupStatus.current_week_exists ? 'Current week backed up' : 'Latest backup'}${backupStatus.latest_file ? `: ${backupStatus.latest_file}` : ''}`
     : 'No weekly backup found yet';
@@ -650,10 +713,23 @@ async function renderWorkoutsSection(container) {
         <div class="progress-stat-value">${avgPerWeek}</div>
         <div class="progress-stat-label">Avg / week</div>
       </div>
+      <div class="progress-stat-card">
+        <div class="progress-stat-value">${formatVolumeKg(avgVolumePerWeek)}</div>
+        <div class="progress-stat-label">kg / week</div>
+      </div>
     </div>
     <div class="progress-chart-card js-freq-chart">
       <div class="progress-chart-title">Sessions per week</div>
       ${buildBarChart(barData, { interactive: true })}
+    </div>
+    <div class="progress-chart-card js-volume-chart">
+      <div class="progress-chart-title">Volume per week <span class="chart-title-unit">(kg x reps)</span></div>
+      ${buildBarChart(volumeBarData, { formatY: formatVolumeKg })}
+      <div class="chart-subtitle">Completed working-set volume across all strength templates</div>
+    </div>
+    <div class="progress-chart-card">
+      <div class="progress-chart-title">Volume by template</div>
+      <div class="template-volume-list">${templateList}</div>
     </div>
     <div class="week-detail-panel hidden"></div>
     <div class="progress-chart-card progress-info-card">

@@ -350,14 +350,16 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
     html += '<div class="sets-container">';
     for (const set of ex.sets) {
       const isDone = !!set.completed;
+      const isWarmupSet = !!set.is_warmup;
+      const setLabel = isWarmupSet ? 'W' : set.set_number;
       if (isDuration) {
         const durationVal = set.duration_seconds != null ? set.duration_seconds : '';
         html += `
-          <div class="set-row${isDone ? ' set-done' : ''}" data-duration="1">
+          <div class="set-row${isDone ? ' set-done' : ''}${isWarmupSet ? ' warmup-set-row' : ''}" data-duration="1" data-set-number="${set.set_number}" data-set-warmup="${isWarmupSet ? '1' : '0'}">
             <button class="set-check${isDone ? ' done' : ''}" data-weid="${ex.id}" data-set="${set.set_number}">
               ${isDone ? '&#x2713;' : ''}
             </button>
-            <span class="set-label">${set.set_number}</span>
+            <span class="set-label">${setLabel}</span>
             <input type="number" class="set-input duration-input"
                    value="${durationVal}" placeholder="sec" inputmode="numeric"
                    data-weid="${ex.id}" data-set="${set.set_number}" data-field="duration">
@@ -368,13 +370,13 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
         const weightVal = set.weight != null ? set.weight : '';
         const repsVal = set.reps != null ? set.reps : (targetRepsNum || '');
         const setAmrap = !!set.is_amrap;
-        const isPartial = !setAmrap && set.reps != null && set.target_reps != null && set.reps < set.target_reps;
+        const isPartial = !isWarmupSet && !setAmrap && set.reps != null && set.target_reps != null && set.reps < set.target_reps;
         html += `
-          <div class="set-row${isDone ? ' set-done' : ''}">
+          <div class="set-row${isDone ? ' set-done' : ''}${isWarmupSet ? ' warmup-set-row' : ''}" data-set-number="${set.set_number}" data-set-warmup="${isWarmupSet ? '1' : '0'}">
             <button class="set-check${isDone ? ' done' : ''}" data-weid="${ex.id}" data-set="${set.set_number}">
               ${isDone ? '&#x2713;' : ''}
             </button>
-            <span class="set-label">${set.set_number}</span>
+            <span class="set-label">${setLabel}</span>
             <input type="number" class="set-input weight-input${isPartial ? ' partial' : ''}"
                    value="${weightVal}" placeholder="${ex.is_assisted ? 'asst' : 'kg'}" step="0.5" inputmode="decimal"
                    data-weid="${ex.id}" data-set="${set.set_number}" data-field="weight">
@@ -383,18 +385,19 @@ function createExerciseCard(ex, workout, previous, isSuperset, supersetIdx, supe
             <input type="number" class="set-input reps-input${isPartial ? ' partial' : ''}"
                    value="${repsVal}" placeholder="reps" inputmode="numeric"
                    data-weid="${ex.id}" data-set="${set.set_number}" data-field="reps">
-            <button class="amrap-toggle${setAmrap ? ' active' : ''}" data-weid="${ex.id}" data-set="${set.set_number}">F</button>
+            ${isWarmupSet ? '<span class="warmup-set-badge">Warm</span>' : `<button class="amrap-toggle${setAmrap ? ' active' : ''}" data-weid="${ex.id}" data-set="${set.set_number}">F</button>`}
           </div>
         `;
       }
     }
     html += '</div>';
-    const showCopyWeight = !isDuration && ex.sets.length > 1;
+    const workingSetCount = ex.sets.filter((set) => !set.is_warmup).length;
+    const showCopyWeight = !isDuration && workingSetCount > 1;
     html += `
       <div class="set-actions">
         <button class="btn btn-sm btn-outline mark-all-done-btn" data-weid="${ex.id}">Done All</button>
         <button class="btn btn-sm btn-outline add-set-btn" data-weid="${ex.id}" data-target-reps="${targetRepsNum}">+ Set</button>
-        ${ex.sets.length > 1 ? `<button class="btn btn-sm btn-outline remove-set-btn" data-weid="${ex.id}">&minus; Set</button>` : ''}
+        ${workingSetCount > 1 ? `<button class="btn btn-sm btn-outline remove-set-btn" data-weid="${ex.id}">&minus; Set</button>` : ''}
         ${showCopyWeight ? `<button class="btn btn-sm btn-outline copy-weight-btn" data-weid="${ex.id}" title="Copy first set weight to all sets">Weight &darr;</button>` : ''}
       </div>
     `;
@@ -804,10 +807,12 @@ async function saveExercise(ex) {
     const checkBtn = row.querySelector('.set-check');
     const completed = stretchCompleted !== null ? stretchCompleted : (checkBtn && checkBtn.classList.contains('done') ? 1 : 0);
     const durationInput = row.querySelector('.duration-input');
+    const setNumber = row.dataset.setNumber != null ? parseInt(row.dataset.setNumber, 10) : sets.length + 1;
+    const isWarmup = row.dataset.setWarmup === '1';
 
     if (durationInput) {
       const duration = durationInput.value !== '' ? parseInt(durationInput.value, 10) : null;
-      sets.push({ weight: null, reps: null, target_reps: null, duration_seconds: duration, completed });
+      sets.push({ set_number: setNumber, weight: null, reps: null, target_reps: null, duration_seconds: duration, completed, is_warmup: isWarmup ? 1 : 0 });
     } else {
       const weightInput = row.querySelector('.weight-input');
       const repsInput = row.querySelector('.reps-input');
@@ -817,7 +822,7 @@ async function saveExercise(ex) {
       const amrapBtn = row.querySelector('.amrap-toggle');
       const isAmrap = amrapBtn ? amrapBtn.classList.contains('active') : false;
 
-      if (weightInput && repsInput) {
+      if (weightInput && repsInput && !isWarmup) {
         if (!isAmrap && reps != null && targetRepsNum != null && reps < targetRepsNum) {
           weightInput.classList.add('partial');
           repsInput.classList.add('partial');
@@ -827,7 +832,7 @@ async function saveExercise(ex) {
         }
       }
 
-      sets.push({ weight, reps, target_reps: isAmrap ? null : targetRepsNum, completed, is_amrap: isAmrap ? 1 : 0 });
+      sets.push({ set_number: setNumber, weight, reps, target_reps: isWarmup ? reps : (isAmrap ? null : targetRepsNum), completed, is_amrap: isWarmup ? 0 : (isAmrap ? 1 : 0), is_warmup: isWarmup ? 1 : 0 });
     }
   });
 
@@ -842,12 +847,13 @@ async function saveExercise(ex) {
 }
 
 function autoMatchWeights(changedInput, card) {
+  if (changedInput.closest('.warmup-set-row')) return;
   const prevWeight = changedInput.dataset.prevWeight;
   if (prevWeight === undefined || prevWeight === '') return;
   const newWeight = changedInput.value;
   if (newWeight === prevWeight) return;
 
-  const allWeights = card.querySelectorAll('.weight-input');
+  const allWeights = card.querySelectorAll('.set-row:not(.warmup-set-row) .weight-input');
   if (allWeights.length <= 1) return;
 
   if (changedInput !== allWeights[0]) {
@@ -874,7 +880,7 @@ function autoMatchWeights(changedInput, card) {
 }
 
 function copyWeightToAll(card, ex) {
-  const allWeights = card.querySelectorAll('.weight-input');
+  const allWeights = card.querySelectorAll('.set-row:not(.warmup-set-row) .weight-input');
   if (allWeights.length <= 1) return;
   const firstValue = allWeights[0].value;
   allWeights.forEach((input, i) => {
@@ -889,7 +895,8 @@ function copyWeightToAll(card, ex) {
 function addSet(ex, card) {
   const container = card.querySelector('.sets-container');
   const currentRows = container.querySelectorAll('.set-row');
-  const newSetNum = currentRows.length + 1;
+  const workingRows = [...currentRows].filter((row) => row.dataset.setWarmup !== '1');
+  const newSetNum = workingRows.length + 1;
   const targetRepsNum = parseInt(ex.target_reps, 10) || 0;
   const isDuration = !!ex.is_duration;
 
@@ -907,6 +914,8 @@ function addSet(ex, card) {
       prevDuration = targetRepsNum || '';
     }
     row.dataset.duration = '1';
+    row.dataset.setNumber = String(newSetNum);
+    row.dataset.setWarmup = '0';
     row.innerHTML = isStretch ? `
       <span class="set-label">${newSetNum}</span>
       <input type="number" class="set-input duration-input"
@@ -928,6 +937,8 @@ function addSet(ex, card) {
       if (lastWeight && lastWeight.value) prevWeight = lastWeight.value;
     }
     const newSetAmrap = ex.is_amrap && !ex.amrap_last_only;
+    row.dataset.setNumber = String(newSetNum);
+    row.dataset.setWarmup = '0';
     row.innerHTML = isStretch ? `
       <span class="set-label">${newSetNum}</span>
       <input type="number" class="set-input reps-input"
@@ -1016,7 +1027,7 @@ function addSet(ex, card) {
 
 function removeSet(ex, card) {
   const container = card.querySelector('.sets-container');
-  const rows = container.querySelectorAll('.set-row');
+  const rows = [...container.querySelectorAll('.set-row')].filter((row) => row.dataset.setWarmup !== '1');
   if (rows.length <= 1) return;
   rows[rows.length - 1].remove();
   if (rows.length - 1 <= 1) {

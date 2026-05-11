@@ -471,6 +471,13 @@ html, body {
   margin-bottom: 6px;
 }
 
+.warmup-set-row {
+  background: rgba(196, 154, 108, 0.12);
+  border: 1px solid rgba(196, 154, 108, 0.28);
+  border-radius: 8px;
+  padding: 5px 6px;
+}
+
 .set-label {
   font-size: 12px;
   color: var(--text-dim);
@@ -514,6 +521,14 @@ html, body {
   color: var(--text-dim);
   font-size: 12px;
   width: 20px;
+}
+
+.warmup-set-badge {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  width: 36px;
 }
 
 /* --- Per-Set AMRAP Toggle --- */
@@ -1614,13 +1629,22 @@ html, body {
 }
 
 .inline-edit-sets,
-.inline-edit-reps {
+.inline-edit-reps,
+.inline-edit-warmup-weight,
+.inline-edit-warmup-reps {
   width: 60px;
 }
 
 .inline-edit-x {
   color: var(--text-dim);
   font-size: 12px;
+}
+
+.inline-edit-label {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  width: 24px;
 }
 
 /* --- Linked exercise indicator --- */
@@ -2437,6 +2461,50 @@ html, body {
   font-size: 12px;
   color: var(--text-dim);
   margin-top: 4px;
+}
+
+.template-volume-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.template-volume-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.template-volume-row:first-child {
+  border-top: none;
+  padding-top: 2px;
+}
+
+.template-volume-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.template-volume-meta,
+.template-volume-numbers span {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.template-volume-numbers {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-shrink: 0;
+}
+
+.template-volume-numbers strong {
+  font-size: 16px;
+  color: var(--accent);
 }
 
 /* Body history (collapsible) */

@@ -15,6 +15,7 @@ export const state = {
   exerciseTrendCache: {},
   performedExercisesCache: null,
   workoutDatesCache: null,
+  trainingVolumeCache: null,
   progressSection: 'body',
   progressTimeRange: '3m',
   progressExerciseId: null,
@@ -43,4 +44,5 @@ export function invalidateProgressCaches() {
   state.performedExercisesCache = null;
   state.exerciseTrendCache = {};
   state.workoutDatesCache = null;
+  state.trainingVolumeCache = null;
 }

@@ -45,7 +45,9 @@ function initSchema() {
       target_reps TEXT NOT NULL DEFAULT '10',
       sort_order INTEGER NOT NULL DEFAULT 0,
       notes TEXT,
-      superset_group INTEGER
+      superset_group INTEGER,
+      warmup_set_weight REAL,
+      warmup_set_reps INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS workouts (
@@ -71,7 +73,8 @@ function initSchema() {
       reps INTEGER,
       target_reps INTEGER,
       duration_seconds INTEGER,
-      completed INTEGER NOT NULL DEFAULT 0
+      completed INTEGER NOT NULL DEFAULT 0,
+      is_warmup INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS schedule (
@@ -236,6 +239,25 @@ function initSchema() {
     db.prepare("SELECT is_amrap FROM workout_sets LIMIT 1").get();
   } catch (e) {
     db.exec("ALTER TABLE workout_sets ADD COLUMN is_amrap INTEGER NOT NULL DEFAULT 0");
+  }
+
+  // Migration: add one inline warmup set definition to day_exercises
+  try {
+    db.prepare("SELECT warmup_set_weight FROM day_exercises LIMIT 1").get();
+  } catch (e) {
+    db.exec("ALTER TABLE day_exercises ADD COLUMN warmup_set_weight REAL");
+  }
+  try {
+    db.prepare("SELECT warmup_set_reps FROM day_exercises LIMIT 1").get();
+  } catch (e) {
+    db.exec("ALTER TABLE day_exercises ADD COLUMN warmup_set_reps INTEGER");
+  }
+
+  // Migration: mark workout_sets that are inline warmup rows
+  try {
+    db.prepare("SELECT is_warmup FROM workout_sets LIMIT 1").get();
+  } catch (e) {
+    db.exec("ALTER TABLE workout_sets ADD COLUMN is_warmup INTEGER NOT NULL DEFAULT 0");
   }
 
   // Migration: add override_exercise_id to workout_exercises (for temporary exercise swaps)
@@ -472,9 +494,9 @@ function duplicateTemplate(id, name) {
       INSERT INTO day_exercises (
         day_id, exercise_id, target_sets, target_reps, sort_order, notes,
         superset_group, is_warmup, is_duration, is_amrap, amrap_last_only,
-        is_adhoc, archived, targets_independent
+        is_adhoc, archived, targets_independent, warmup_set_weight, warmup_set_reps
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
     `);
 
     for (const ex of exercises) {
@@ -490,7 +512,9 @@ function duplicateTemplate(id, name) {
         ex.is_duration ? 1 : 0,
         ex.is_amrap ? 1 : 0,
         ex.amrap_last_only ? 1 : 0,
-        ex.targets_independent ? 1 : 0
+        ex.targets_independent ? 1 : 0,
+        ex.warmup_set_weight != null ? ex.warmup_set_weight : null,
+        ex.warmup_set_reps != null ? ex.warmup_set_reps : null
       );
     }
 
@@ -644,7 +668,7 @@ function getDayExercises(dayId, includeAdhoc = false) {
 }
 
 function updateDayExercise(id, fields) {
-  const allowed = ['target_sets', 'target_reps', 'sort_order', 'notes', 'superset_group', 'exercise_id', 'is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'targets_independent', 'is_assisted'];
+  const allowed = ['target_sets', 'target_reps', 'sort_order', 'notes', 'superset_group', 'exercise_id', 'is_warmup', 'is_duration', 'is_amrap', 'amrap_last_only', 'targets_independent', 'is_assisted', 'warmup_set_weight', 'warmup_set_reps'];
   const updates = [];
   const values = [];
   for (const [key, val] of Object.entries(fields)) {
@@ -820,8 +844,8 @@ function initWorkoutFromTemplate(date, templateId) {
     VALUES (?, ?, ?, 0, NULL)
   `);
   const insertWs = db.prepare(`
-    INSERT INTO workout_sets (workout_exercise_id, set_number, weight, reps, target_reps, duration_seconds, is_amrap)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO workout_sets (workout_exercise_id, set_number, weight, reps, target_reps, duration_seconds, is_amrap, is_warmup)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const txn = db.transaction(() => {
@@ -829,7 +853,20 @@ function initWorkoutFromTemplate(date, templateId) {
       const weInfo = insertWe.run(workout.id, te.id, te.sort_order);
       const targetRepsNum = parseInt(te.target_reps);
       const numSets = te.target_sets || 3;
-      const prevSets = prevDataMap[te.id] || [];
+      const prevSets = (prevDataMap[te.id] || []).filter(s => !s.is_warmup);
+
+      if (!te.is_duration && !te.is_warmup && te.warmup_set_weight != null && te.warmup_set_reps != null) {
+        insertWs.run(
+          weInfo.lastInsertRowid,
+          0,
+          te.warmup_set_weight,
+          te.warmup_set_reps,
+          te.warmup_set_reps,
+          null,
+          0,
+          1
+        );
+      }
 
       for (let s = 1; s <= numSets; s++) {
         const prev = prevSets[s - 1];
@@ -839,7 +876,7 @@ function initWorkoutFromTemplate(date, templateId) {
         const tReps = isDuration ? null : (isNaN(targetRepsNum) ? null : targetRepsNum);
         const duration = isDuration ? (prev ? prev.duration_seconds : (isNaN(targetRepsNum) ? null : targetRepsNum)) : null;
         const setIsAmrap = te.is_amrap ? (te.amrap_last_only ? (s === numSets ? 1 : 0) : 1) : 0;
-        insertWs.run(weInfo.lastInsertRowid, s, weight, reps, tReps, duration, setIsAmrap);
+        insertWs.run(weInfo.lastInsertRowid, s, weight, reps, tReps, duration, setIsAmrap, 0);
       }
     }
   });
@@ -866,20 +903,21 @@ function saveWorkoutExercise(workoutExerciseId, sets, note, skipped) {
   if (sets && sets.length > 0) {
     db.prepare('DELETE FROM workout_sets WHERE workout_exercise_id = ?').run(workoutExerciseId);
     const stmt = db.prepare(`
-      INSERT INTO workout_sets (workout_exercise_id, set_number, weight, reps, target_reps, duration_seconds, completed, is_amrap)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO workout_sets (workout_exercise_id, set_number, weight, reps, target_reps, duration_seconds, completed, is_amrap, is_warmup)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const txn = db.transaction(() => {
       sets.forEach((s, i) => {
         stmt.run(
           workoutExerciseId,
-          i + 1,
+          s.set_number != null ? s.set_number : i + 1,
           s.weight != null ? s.weight : null,
           s.reps != null ? s.reps : null,
           s.target_reps != null ? s.target_reps : null,
           s.duration_seconds != null ? s.duration_seconds : null,
           s.completed ? 1 : 0,
-          s.is_amrap ? 1 : 0
+          s.is_amrap ? 1 : 0,
+          s.is_warmup ? 1 : 0
         );
       });
     });
@@ -1158,7 +1196,7 @@ function getPerformedExercises() {
     FROM workout_exercises we
     JOIN day_exercises de ON de.id = we.day_exercise_id AND de.is_warmup = 0
     JOIN days d ON d.id = de.day_id AND d.is_stretch = 0
-    JOIN workout_sets ws ON ws.workout_exercise_id = we.id AND ws.completed = 1
+    JOIN workout_sets ws ON ws.workout_exercise_id = we.id AND ws.completed = 1 AND ws.is_warmup = 0
     JOIN exercises effective ON effective.id = COALESCE(we.override_exercise_id, de.exercise_id)
     JOIN workouts w ON w.id = we.workout_id
     WHERE we.skipped = 0
@@ -1184,6 +1222,7 @@ function getExerciseTrend(exerciseId) {
     JOIN workout_sets ws ON ws.workout_exercise_id = we.id
     WHERE COALESCE(we.override_exercise_id, de.exercise_id) = ?
       AND de.is_warmup = 0
+      AND ws.is_warmup = 0
       AND we.skipped = 0
     ORDER BY w.date ASC, ws.set_number ASC
   `).all(exerciseId);
@@ -1229,6 +1268,112 @@ function getExerciseTrend(exerciseId) {
     result.push({ date, total_volume: Math.round(totalVolume), completion_pct: completionPct });
   }
   return result;
+}
+
+function getMondayForDate(iso) {
+  const d = new Date(`${iso}T00:00:00`);
+  const jsDay = d.getDay();
+  const diff = jsDay === 0 ? -6 : 1 - jsDay;
+  d.setDate(d.getDate() + diff);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function getSetVolume(row) {
+  if (!row.completed || row.reps == null) return 0;
+  let effectiveWeight;
+  if (row.is_assisted) {
+    const bw = row.bw_before != null ? row.bw_before : row.bw_earliest;
+    if (bw == null) return 0;
+    effectiveWeight = Math.max(0, bw - (row.weight || 0));
+  } else {
+    if (row.weight == null) return 0;
+    effectiveWeight = row.weight;
+  }
+  return effectiveWeight * row.reps;
+}
+
+function getTrainingVolumeSummary() {
+  // Aggregate completed strength volume while excluding warmups, skipped exercises,
+  // and stretch templates. Assisted exercises use the same bodyweight-aware volume
+  // calculation as the per-exercise trend.
+  const rows = db.prepare(`
+    SELECT w.id as workout_id, w.date, d.id as template_id, d.name as template_name,
+           de.is_assisted, ws.weight, ws.reps, ws.completed,
+           (SELECT weight_kg FROM body_weights WHERE date <= w.date ORDER BY date DESC LIMIT 1) AS bw_before,
+           (SELECT weight_kg FROM body_weights ORDER BY date ASC LIMIT 1) AS bw_earliest
+    FROM workouts w
+    JOIN days d ON d.id = w.day_id AND d.is_stretch = 0
+    JOIN workout_exercises we ON we.workout_id = w.id AND we.skipped = 0
+    JOIN day_exercises de ON de.id = we.day_exercise_id AND de.is_warmup = 0
+    JOIN workout_sets ws ON ws.workout_exercise_id = we.id AND ws.is_warmup = 0
+    ORDER BY w.date ASC, w.id ASC, ws.set_number ASC
+  `).all();
+
+  const sessionMap = new Map();
+  const weekMap = new Map();
+  const templateMap = new Map();
+
+  for (const row of rows) {
+    const volume = getSetVolume(row);
+    if (volume <= 0) continue;
+
+    if (!sessionMap.has(row.workout_id)) {
+      sessionMap.set(row.workout_id, {
+        workout_id: row.workout_id,
+        date: row.date,
+        week_start: getMondayForDate(row.date),
+        template_id: row.template_id,
+        template_name: row.template_name,
+        total_volume: 0,
+      });
+    }
+    sessionMap.get(row.workout_id).total_volume += volume;
+  }
+
+  const sessions = [...sessionMap.values()]
+    .map((session) => ({ ...session, total_volume: Math.round(session.total_volume) }))
+    .filter((session) => session.total_volume > 0);
+
+  for (const session of sessions) {
+    if (!weekMap.has(session.week_start)) {
+      weekMap.set(session.week_start, { week_start: session.week_start, total_volume: 0, session_count: 0 });
+    }
+    const week = weekMap.get(session.week_start);
+    week.total_volume += session.total_volume;
+    week.session_count += 1;
+
+    if (!templateMap.has(session.template_id)) {
+      templateMap.set(session.template_id, {
+        template_id: session.template_id,
+        template_name: session.template_name,
+        total_volume: 0,
+        session_count: 0,
+        latest_date: session.date,
+        latest_volume: session.total_volume,
+      });
+    }
+    const template = templateMap.get(session.template_id);
+    template.total_volume += session.total_volume;
+    template.session_count += 1;
+    if (session.date >= template.latest_date) {
+      template.latest_date = session.date;
+      template.latest_volume = session.total_volume;
+    }
+  }
+
+  const weeks = [...weekMap.values()]
+    .map((week) => ({ ...week, total_volume: Math.round(week.total_volume) }))
+    .sort((a, b) => a.week_start.localeCompare(b.week_start));
+
+  const templates = [...templateMap.values()]
+    .map((template) => ({
+      ...template,
+      total_volume: Math.round(template.total_volume),
+      avg_volume: Math.round(template.total_volume / template.session_count),
+    }))
+    .sort((a, b) => b.total_volume - a.total_volume || a.template_name.localeCompare(b.template_name));
+
+  return { sessions, weeks, templates };
 }
 
 function getAllWorkoutSessionDates() {
@@ -2050,6 +2195,7 @@ module.exports = {
   // Trend / Progress helpers
   getPerformedExercises,
   getExerciseTrend,
+  getTrainingVolumeSummary,
   getAllWorkoutSessionDates,
   // User settings
   getUserSetting,

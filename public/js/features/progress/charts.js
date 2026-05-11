@@ -169,6 +169,7 @@ export function buildBarChart(bars, opts = {}) {
   const values = bars.map((b) => b.value);
   const yTicks = buildNiceTicks(0, Math.max(...values, 1), 4);
   const yMax = yTicks[yTicks.length - 1] || 1;
+  const formatY = opts.formatY || ((v) => String(Math.round(v)));
   const gap = plotW / bars.length;
   const barW = Math.max(4, Math.min(18, gap * 0.72));
 
@@ -176,7 +177,7 @@ export function buildBarChart(bars, opts = {}) {
     const y = pt + (1 - (tick / yMax)) * plotH;
     return `
       <line x1="${pl}" y1="${y.toFixed(1)}" x2="${W - pr}" y2="${y.toFixed(1)}" class="chart-grid-line"/>
-      <text x="${pl - 6}" y="${(y + 3).toFixed(1)}" class="chart-label" text-anchor="end">${Math.round(tick)}</text>
+      <text x="${pl - 6}" y="${(y + 3).toFixed(1)}" class="chart-label" text-anchor="end">${formatY(tick)}</text>
     `;
   }).join('');
 

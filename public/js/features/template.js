@@ -312,6 +312,12 @@ function showCreateTemplateForm(section, btn, isStretch = false) {
   });
 }
 
+function formatTemplateTarget(ex, sets = ex.target_sets, reps = ex.target_reps) {
+  const base = ex.is_duration ? `${sets} sets` : `${sets}&times;${reps}`;
+  if (ex.warmup_set_weight == null || ex.warmup_set_reps == null || ex.is_duration || ex.is_warmup) return base;
+  return `${base} + WU ${ex.warmup_set_weight}kg&times;${ex.warmup_set_reps}`;
+}
+
 async function loadTemplateExercises(templateId, container, isStretchTemplate = false) {
   const exercises = await api(`/api/templates/${templateId}/exercises`);
   const allExercises = await api('/api/exercises');
@@ -360,7 +366,7 @@ async function loadTemplateExercises(templateId, container, isStretchTemplate = 
               ${ex.is_duration ? '<span class="duration-badge">Duration</span>' : ''}
               ${ex.is_amrap ? `<span class="amrap-badge">${ex.amrap_last_only ? 'AMRAP Last' : 'AMRAP'}</span>` : ''}
             </div>
-            <div class="template-exercise-detail">${ex.is_duration ? `${ex.target_sets} sets` : `${ex.target_sets}&times;${ex.target_reps}`}</div>
+            <div class="template-exercise-detail">${formatTemplateTarget(ex)}</div>
             ${ex.notes ? `<div class="template-exercise-note">${ex.notes.replace(/</g, '&lt;')}</div>` : ''}
             ${ex.linked_templates && ex.linked_templates.length > 0 ? `<div class="linked-indicator${ex.targets_independent ? ' targets-independent' : ''}">${ex.targets_independent ? CHAIN_SVG_BROKEN : CHAIN_SVG_LINKED} ${ex.targets_independent ? 'Targets independent' : 'Synced'}: ${ex.linked_templates.join(', ')}</div>` : ''}
           </div>
@@ -501,21 +507,31 @@ async function loadTemplateExercises(templateId, container, isStretchTemplate = 
 
       const isLinked = ex.linked_templates && ex.linked_templates.length > 0;
       info.innerHTML = `
-        <div class="inline-edit-form">
-          <input type="text" class="inline-edit-name" value="${ex.exercise_name}" placeholder="Name" autocomplete="off">
-          <div class="inline-edit-row">
-            <input type="number" class="inline-edit-sets" value="${ex.target_sets}" placeholder="Sets" inputmode="numeric">
-            <span class="inline-edit-x">&times;</span>
-            <input type="text" class="inline-edit-reps" value="${ex.target_reps}" placeholder="Reps">
+          <div class="inline-edit-form">
+            <input type="text" class="inline-edit-name" value="${ex.exercise_name}" placeholder="Name" autocomplete="off">
+            <div class="inline-edit-row">
+              <input type="number" class="inline-edit-sets" value="${ex.target_sets}" placeholder="Sets" inputmode="numeric">
+              <span class="inline-edit-x">&times;</span>
+              <input type="text" class="inline-edit-reps" value="${ex.target_reps}" placeholder="Reps">
+            </div>
+            ${(!isStretchTemplate && !ex.is_duration && !ex.is_warmup) ? `
+              <div class="inline-edit-row inline-warmup-row">
+                <span class="inline-edit-label">WU</span>
+                <input type="number" class="inline-edit-warmup-weight" value="${ex.warmup_set_weight != null ? ex.warmup_set_weight : ''}" placeholder="kg" step="0.5" inputmode="decimal">
+                <span class="inline-edit-x">&times;</span>
+                <input type="number" class="inline-edit-warmup-reps" value="${ex.warmup_set_reps != null ? ex.warmup_set_reps : ''}" placeholder="reps" inputmode="numeric">
+              </div>
+            ` : ''}
+            ${isLinked ? `<button type="button" class="sync-targets-btn ${ex.targets_independent ? 'is-independent' : 'is-synced'}">${ex.targets_independent ? CHAIN_SVG_BROKEN : CHAIN_SVG_LINKED}<span class="sync-targets-label">${ex.targets_independent ? 'Targets independent' : 'Targets synced'}</span></button>` : ''}
+            <input type="text" class="inline-edit-note" value="${(ex.notes || '').replace(/"/g, '&quot;')}" placeholder="Note (shown during workout)">
           </div>
-          ${isLinked ? `<button type="button" class="sync-targets-btn ${ex.targets_independent ? 'is-independent' : 'is-synced'}">${ex.targets_independent ? CHAIN_SVG_BROKEN : CHAIN_SVG_LINKED}<span class="sync-targets-label">${ex.targets_independent ? 'Targets independent' : 'Targets synced'}</span></button>` : ''}
-          <input type="text" class="inline-edit-note" value="${(ex.notes || '').replace(/"/g, '&quot;')}" placeholder="Note (shown during workout)">
-        </div>
       `;
 
       const nameInput = info.querySelector('.inline-edit-name');
       const setsInput = info.querySelector('.inline-edit-sets');
       const repsInput = info.querySelector('.inline-edit-reps');
+      const warmupWeightInput = info.querySelector('.inline-edit-warmup-weight');
+      const warmupRepsInput = info.querySelector('.inline-edit-warmup-reps');
       const noteInput = info.querySelector('.inline-edit-note');
       const syncBtn = info.querySelector('.sync-targets-btn');
 
@@ -536,7 +552,7 @@ async function loadTemplateExercises(templateId, container, isStretchTemplate = 
             ${ex.is_duration ? '<span class="duration-badge">Duration</span>' : ''}
             ${ex.is_amrap ? `<span class="amrap-badge">${ex.amrap_last_only ? 'AMRAP Last' : 'AMRAP'}</span>` : ''}
           </div>
-          <div class="template-exercise-detail">${ex.is_duration ? `${sets} sets` : `${sets}&times;${reps}`}</div>
+          <div class="template-exercise-detail">${formatTemplateTarget(ex, sets, reps)}</div>
           ${notes ? `<div class="template-exercise-note">${notes.replace(/</g, '&lt;')}</div>` : ''}
           ${linkedHtml}
         `;
@@ -547,12 +563,18 @@ async function loadTemplateExercises(templateId, container, isStretchTemplate = 
         const newSets = parseInt(setsInput.value, 10) || ex.target_sets;
         const newReps = repsInput.value.trim() || ex.target_reps;
         const newNote = noteInput.value.trim();
+        const warmupWeight = warmupWeightInput && warmupWeightInput.value !== '' ? parseFloat(warmupWeightInput.value) : null;
+        const warmupReps = warmupRepsInput && warmupRepsInput.value !== '' ? parseInt(warmupRepsInput.value, 10) : null;
+        const newWarmupWeight = Number.isFinite(warmupWeight) && Number.isFinite(warmupReps) && warmupWeight > 0 && warmupReps > 0 ? warmupWeight : null;
+        const newWarmupReps = newWarmupWeight != null ? warmupReps : null;
         if (!newName) { restoreDisplay(ex.exercise_name, ex.target_sets, ex.target_reps, ex.notes); return; }
 
         const updates = {};
         if (newSets !== ex.target_sets) updates.target_sets = newSets;
         if (newReps !== ex.target_reps) updates.target_reps = newReps;
         if (newNote !== (ex.notes || '')) updates.notes = newNote || null;
+        if (newWarmupWeight !== (ex.warmup_set_weight ?? null)) updates.warmup_set_weight = newWarmupWeight;
+        if (newWarmupReps !== (ex.warmup_set_reps ?? null)) updates.warmup_set_reps = newWarmupReps;
         if (newName !== ex.exercise_name) {
           const result = await api('/api/exercises', { method: 'POST', body: { name: newName } });
           updates.exercise_id = result.id;
@@ -568,6 +590,8 @@ async function loadTemplateExercises(templateId, container, isStretchTemplate = 
         ex.target_sets = newSets;
         ex.target_reps = newReps;
         ex.notes = newNote || null;
+        ex.warmup_set_weight = newWarmupWeight;
+        ex.warmup_set_reps = newWarmupReps;
         restoreDisplay(newName, newSets, newReps, ex.notes);
       };
 
@@ -586,7 +610,7 @@ async function loadTemplateExercises(templateId, container, isStretchTemplate = 
         }, 150);
       };
 
-      [nameInput, setsInput, repsInput, noteInput].forEach((input) => {
+      [nameInput, setsInput, repsInput, warmupWeightInput, warmupRepsInput, noteInput].filter(Boolean).forEach((input) => {
         input.addEventListener('blur', handleBlur);
         input.addEventListener('keydown', (ev) => {
           if (ev.key === 'Enter') { saved = true; saveEdit(); }

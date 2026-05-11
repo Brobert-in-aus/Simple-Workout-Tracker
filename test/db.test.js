@@ -242,6 +242,84 @@ test('getPerformedExercises excludes warmups and skipped exercises', () => {
   assert.ok(!names.includes('Smoke Performed Warmup'), 'warmup must be excluded');
 });
 
+test('getTrainingVolumeSummary aggregates per-template and per-week volume', () => {
+  db.logBodyWeight('2026-05-01', 80);
+  const { templateId: upperId } = buildTemplate('Smoke Volume Upper', [
+    { name: 'Smoke Volume Warmup Bench', targetSets: 1, targetReps: '10', isWarmup: true },
+    { name: 'Smoke Volume Bench', targetSets: 2, targetReps: '8' },
+  ]);
+  const { templateId: pullId } = buildTemplate('Smoke Volume Pull', [
+    { name: 'Smoke Volume Pullup', targetSets: 2, targetReps: '5' },
+  ]);
+  db.getDb().prepare('UPDATE day_exercises SET is_assisted = 1 WHERE day_id = ?').run(pullId);
+
+  const upper = db.initWorkoutFromTemplate('2026-05-04', upperId);
+  const upperFull = db.getWorkoutFull(upper.id);
+  db.saveWorkoutExercise(upperFull[0].id, [
+    { weight: 20, reps: 10, target_reps: 10, completed: 1 },
+  ]);
+  db.saveWorkoutExercise(upperFull[1].id, [
+    { weight: 100, reps: 8, target_reps: 8, completed: 1 },
+    { weight: 100, reps: 8, target_reps: 8, completed: 1 },
+  ]);
+
+  const pull = db.initWorkoutFromTemplate('2026-05-06', pullId);
+  const pullFull = db.getWorkoutFull(pull.id);
+  db.saveWorkoutExercise(pullFull[0].id, [
+    { weight: 20, reps: 5, target_reps: 5, completed: 1 },
+    { weight: 20, reps: 5, target_reps: 5, completed: 1 },
+  ]);
+
+  const summary = db.getTrainingVolumeSummary();
+  const week = summary.weeks.find((w) => w.week_start === '2026-05-04');
+  assert.equal(week.total_volume, 2200);
+  assert.equal(week.session_count, 2);
+
+  const upperTemplate = summary.templates.find((t) => t.template_id === upperId);
+  assert.equal(upperTemplate.total_volume, 1600);
+  assert.equal(upperTemplate.latest_volume, 1600);
+
+  const pullTemplate = summary.templates.find((t) => t.template_id === pullId);
+  assert.equal(pullTemplate.total_volume, 600);
+  assert.equal(pullTemplate.avg_volume, 600);
+
+  assert.equal(summary.sessions.find((s) => s.workout_id === upper.id).total_volume, 1600);
+  assert.equal(summary.sessions.find((s) => s.workout_id === pull.id).total_volume, 600);
+});
+
+test('inline template warmup set is checkable and excluded from volume', () => {
+  const { templateId, deIds } = buildTemplate('Smoke Inline Warmup', [
+    { name: 'Smoke Inline Squat', targetSets: 2, targetReps: '5' },
+  ]);
+  db.updateDayExercise(deIds[0], { warmup_set_weight: 60, warmup_set_reps: 5 });
+
+  const workout = db.initWorkoutFromTemplate('2026-05-11', templateId);
+  let full = db.getWorkoutFull(workout.id);
+
+  assert.equal(full[0].sets.length, 3);
+  assert.equal(full[0].sets[0].set_number, 0);
+  assert.equal(full[0].sets[0].is_warmup, 1);
+  assert.equal(full[0].sets[0].weight, 60);
+  assert.equal(full[0].sets[0].reps, 5);
+
+  db.saveWorkoutExercise(full[0].id, [
+    { set_number: 0, weight: 60, reps: 5, target_reps: 5, completed: 1, is_warmup: 1 },
+    { set_number: 1, weight: 100, reps: 5, target_reps: 5, completed: 1 },
+    { set_number: 2, weight: 100, reps: 5, target_reps: 5, completed: 1 },
+  ]);
+  full = db.getWorkoutFull(workout.id);
+  assert.equal(full[0].sets[0].is_warmup, 1, 'inline warmup survives save');
+
+  const exerciseId = db.getDb().prepare('SELECT exercise_id FROM day_exercises WHERE id = ?').get(deIds[0]).exercise_id;
+  const trend = db.getExerciseTrend(exerciseId);
+  assert.equal(trend[0].total_volume, 1000);
+  assert.equal(trend[0].completion_pct, 100);
+
+  const summary = db.getTrainingVolumeSummary();
+  const session = summary.sessions.find((s) => s.workout_id === workout.id);
+  assert.equal(session.total_volume, 1000);
+});
+
 // --- Template duplication naming ------------------------------------------
 
 test('duplicateTemplate auto-numbers repeated copies', () => {
