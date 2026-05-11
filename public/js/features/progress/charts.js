@@ -222,6 +222,7 @@ function openChartModal(card) {
 
 export function wireExpandableCharts(container) {
   container.querySelectorAll('.progress-chart-card').forEach((card) => {
+    if (card.classList.contains('no-expand')) return;
     if (!card.querySelector('.progress-chart-svg')) return;
     card.classList.add('progress-chart-expandable');
     card.addEventListener('click', () => openChartModal(card));

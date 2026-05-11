@@ -638,23 +638,27 @@ async function renderWorkoutsSection(container) {
     if (!filteredTemplateSessions.has(session.template_id)) filteredTemplateSessions.set(session.template_id, []);
     filteredTemplateSessions.get(session.template_id).push(session);
   }
-  const templateVolumes = volumeSummary.templates
+  const templateTrends = volumeSummary.templates
     .map((template) => {
       const sessions = filteredTemplateSessions.get(template.template_id) || [];
-      const totalVolume = sessions.reduce((sum, session) => sum + session.total_volume, 0);
       const latest = sessions[sessions.length - 1] || null;
+      const weekly = groupByWeek(sessions, (session) => session.date)
+        .map(({ weekStart, items }) => ({
+          label: formatDateShort(weekStart),
+          value: items.reduce((sum, session) => sum + session.total_volume, 0),
+          weekStart,
+        }))
+        .slice(-52);
       return {
         template_id: template.template_id,
         template_name: template.template_name,
-        total_volume: totalVolume,
         session_count: sessions.length,
-        avg_volume: sessions.length > 0 ? Math.round(totalVolume / sessions.length) : 0,
         latest_date: latest ? latest.date : null,
-        latest_volume: latest ? latest.total_volume : 0,
+        weekly,
       };
     })
     .filter((template) => template.session_count > 0)
-    .sort((a, b) => b.total_volume - a.total_volume || a.template_name.localeCompare(b.template_name));
+    .sort((a, b) => a.template_name.localeCompare(b.template_name));
   const totalVolume = filteredWeeks.reduce((sum, week) => sum + week.total_volume, 0);
   const volumeBounds = getRangeBounds(
     state.progressTimeRange,
@@ -678,18 +682,17 @@ async function renderWorkoutsSection(container) {
     value: week.total_volume,
     weekStart: week.week_start,
   }));
-  const templateList = templateVolumes.length > 0
-    ? templateVolumes.slice(0, 8).map((template) => `
-      <div class="template-volume-row">
-        <div>
-          <div class="template-volume-name">${escapeHtml(template.template_name)}</div>
-          <div class="template-volume-meta">${template.session_count} session${template.session_count === 1 ? '' : 's'}${template.latest_date ? ` · latest ${formatDateShort(template.latest_date)}` : ''}</div>
+  const templateList = templateTrends.length > 0
+    ? templateTrends.map((template) => `
+      <details class="template-volume-item">
+        <summary class="template-volume-summary">
+          <span class="template-volume-name">${escapeHtml(template.template_name)}</span>
+          <span class="template-volume-meta">${template.session_count} session${template.session_count === 1 ? '' : 's'}${template.latest_date ? ` · latest ${formatDateShort(template.latest_date)}` : ''}</span>
+        </summary>
+        <div class="template-volume-chart">
+          ${buildBarChart(template.weekly, { formatY: formatVolumeKg })}
         </div>
-        <div class="template-volume-numbers">
-          <strong>${formatVolumeKg(template.total_volume)}</strong>
-          <span>avg ${formatVolumeKg(template.avg_volume)}</span>
-        </div>
-      </div>
+      </details>
     `).join('')
     : '<div class="week-detail-empty">No completed volume in this range</div>';
   const backupLabel = backupStatus.has_backup
@@ -727,7 +730,7 @@ async function renderWorkoutsSection(container) {
       ${buildBarChart(volumeBarData, { formatY: formatVolumeKg })}
       <div class="chart-subtitle">Completed working-set volume across all strength templates</div>
     </div>
-    <div class="progress-chart-card">
+    <div class="progress-chart-card no-expand">
       <div class="progress-chart-title">Volume by template</div>
       <div class="template-volume-list">${templateList}</div>
     </div>
