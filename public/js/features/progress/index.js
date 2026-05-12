@@ -49,7 +49,9 @@ function renderProgressShell(container) {
         <button class="range-btn" data-range="1y">1Y</button>
         <button class="range-btn" data-range="all">All</button>
         <button class="progress-export-btn progress-import-btn" type="button">Import Apple Health</button>
-        <button class="progress-export-btn" type="button">Export JSON</button>
+        <button class="progress-export-btn progress-full-export-btn" type="button">Full JSON</button>
+        <button class="progress-export-btn progress-template-json-btn" type="button">Template JSON</button>
+        <button class="progress-export-btn progress-template-csv-btn" type="button">Template CSV</button>
       </div>
       <div class="progress-content"></div>
     </div>
@@ -74,8 +76,14 @@ function renderProgressShell(container) {
     });
   });
 
-  container.querySelector('.progress-export-btn:not(.progress-import-btn)').addEventListener('click', () => {
+  container.querySelector('.progress-full-export-btn').addEventListener('click', () => {
     window.location.href = '/api/export/json';
+  });
+  container.querySelector('.progress-template-json-btn').addEventListener('click', () => {
+    window.location.href = '/api/export/templates-current.json';
+  });
+  container.querySelector('.progress-template-csv-btn').addEventListener('click', () => {
+    window.location.href = '/api/export/templates-current.csv';
   });
   container.querySelector('.progress-import-btn').addEventListener('click', () => {
     openHealthImportModal();

@@ -1397,6 +1397,108 @@ function deleteBodyWeight(date) {
   db.prepare('DELETE FROM body_weights WHERE date = ?').run(date);
 }
 
+function getCurrentTemplateSnapshot() {
+  getDb();
+  const exportedAt = new Date().toISOString();
+  const currentBodyweight = db.prepare('SELECT date, weight_kg FROM body_weights ORDER BY date DESC LIMIT 1').get() || null;
+  const templates = getAllTemplates().map((template) => {
+    const exercises = getDayExercises(template.id).map((exercise) => {
+      const latest = db.prepare(`
+        SELECT we.id as workout_exercise_id, w.id as workout_id, w.date,
+               COALESCE(oe.name, e.name) as performed_exercise_name,
+               we.override_exercise_id
+        FROM workout_exercises we
+        JOIN workouts w ON w.id = we.workout_id
+        JOIN day_exercises de ON de.id = we.day_exercise_id
+        JOIN exercises e ON e.id = de.exercise_id
+        LEFT JOIN exercises oe ON oe.id = we.override_exercise_id
+        WHERE we.day_exercise_id = ? AND we.skipped = 0
+        ORDER BY w.date DESC, w.id DESC
+        LIMIT 1
+      `).get(exercise.id);
+
+      const latestSets = latest
+        ? db.prepare(`
+          SELECT set_number, weight, reps, target_reps, duration_seconds, completed, is_amrap, is_warmup
+          FROM workout_sets
+          WHERE workout_exercise_id = ?
+          ORDER BY set_number
+        `).all(latest.workout_exercise_id).map((set) => {
+          const enteredWeight = set.weight != null ? set.weight : null;
+          const netWeight = exercise.is_assisted && enteredWeight != null && currentBodyweight
+            ? Math.max(0, currentBodyweight.weight_kg - enteredWeight)
+            : enteredWeight;
+          return {
+            set_number: set.set_number,
+            label: set.is_warmup ? 'W' : String(set.set_number),
+            completed: !!set.completed,
+            is_warmup: !!set.is_warmup,
+            is_amrap: !!set.is_amrap,
+            entered_weight_kg: enteredWeight,
+            assistance_kg: exercise.is_assisted ? enteredWeight : null,
+            net_weight_kg: netWeight,
+            reps: set.reps,
+            target_reps: set.target_reps,
+            duration_seconds: set.duration_seconds,
+          };
+        })
+        : [];
+
+      return {
+        template_exercise_id: exercise.id,
+        exercise_id: exercise.exercise_id,
+        exercise_name: exercise.exercise_name,
+        performed_exercise_name: latest ? latest.performed_exercise_name : null,
+        sort_order: exercise.sort_order,
+        target_sets: exercise.target_sets,
+        target_reps: exercise.target_reps,
+        notes: exercise.notes,
+        flags: {
+          warmup_exercise: !!exercise.is_warmup,
+          duration: !!exercise.is_duration,
+          amrap: !!exercise.is_amrap,
+          amrap_last_only: !!exercise.amrap_last_only,
+          assisted: !!exercise.is_assisted,
+        },
+        inline_warmup_set: exercise.warmup_set_weight != null && exercise.warmup_set_reps != null
+          ? {
+            weight_kg: exercise.warmup_set_weight,
+            reps: exercise.warmup_set_reps,
+          }
+          : null,
+        latest_session: latest
+          ? {
+            date: latest.date,
+            workout_id: latest.workout_id,
+            swapped: !!latest.override_exercise_id,
+          }
+          : null,
+        latest_sets: latestSets,
+      };
+    });
+
+    return {
+      template_id: template.id,
+      template_name: template.name,
+      is_stretch: !!template.is_stretch,
+      exercises,
+    };
+  });
+
+  return {
+    exported_at: exportedAt,
+    app: 'simple-workout-tracker',
+    snapshot_type: 'current_templates',
+    current_bodyweight: currentBodyweight
+      ? {
+        date: currentBodyweight.date,
+        weight_kg: currentBodyweight.weight_kg,
+      }
+      : null,
+    templates,
+  };
+}
+
 function closeDb() {
   if (db) {
     db.close();
@@ -2192,6 +2294,7 @@ module.exports = {
   logBodyWeight,
   getBodyWeights,
   deleteBodyWeight,
+  getCurrentTemplateSnapshot,
   // Trend / Progress helpers
   getPerformedExercises,
   getExerciseTrend,

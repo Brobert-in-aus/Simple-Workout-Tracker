@@ -832,6 +832,84 @@ app.get('/api/export/json', (req, res) => {
   res.send(JSON.stringify(exportData, null, 2));
 });
 
+function csvCell(value) {
+  if (value == null) return '';
+  const str = String(value);
+  return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+function templateSnapshotToCsv(snapshot) {
+  const headers = [
+    'template',
+    'exercise',
+    'performed_exercise',
+    'set',
+    'date',
+    'target_sets',
+    'target_reps',
+    'entered_weight_kg',
+    'assistance_kg',
+    'net_weight_kg',
+    'reps',
+    'target_reps',
+    'duration_seconds',
+    'completed',
+    'flags',
+    'current_bodyweight_kg',
+    'current_bodyweight_date',
+    'notes',
+  ];
+  const rows = [headers];
+  for (const template of snapshot.templates) {
+    for (const exercise of template.exercises) {
+      const flags = Object.entries(exercise.flags)
+        .filter(([, enabled]) => enabled)
+        .map(([key]) => key)
+        .join('|');
+      const sets = exercise.latest_sets.length > 0
+        ? exercise.latest_sets
+        : [{ label: '', entered_weight_kg: null, assistance_kg: null, net_weight_kg: null, reps: null, target_reps: null, duration_seconds: null, completed: null }];
+      for (const set of sets) {
+        rows.push([
+          template.template_name,
+          exercise.exercise_name,
+          exercise.performed_exercise_name || exercise.exercise_name,
+          set.label,
+          exercise.latest_session ? exercise.latest_session.date : '',
+          exercise.target_sets,
+          exercise.target_reps,
+          set.entered_weight_kg,
+          set.assistance_kg,
+          set.net_weight_kg,
+          set.reps,
+          set.target_reps,
+          set.duration_seconds,
+          set.completed == null ? '' : (set.completed ? 'yes' : 'no'),
+          flags,
+          snapshot.current_bodyweight ? snapshot.current_bodyweight.weight_kg : '',
+          snapshot.current_bodyweight ? snapshot.current_bodyweight.date : '',
+          exercise.notes || '',
+        ]);
+      }
+    }
+  }
+  return rows.map((row) => row.map(csvCell).join(',')).join('\n');
+}
+
+app.get('/api/export/templates-current.json', (req, res) => {
+  const snapshot = db.getCurrentTemplateSnapshot();
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="template-snapshot-${todayISO()}.json"`);
+  res.send(JSON.stringify(snapshot, null, 2));
+});
+
+app.get('/api/export/templates-current.csv', (req, res) => {
+  const snapshot = db.getCurrentTemplateSnapshot();
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="template-snapshot-${todayISO()}.csv"`);
+  res.send(templateSnapshotToCsv(snapshot));
+});
+
 // --- Progress / Trend API ---
 
 app.get('/api/exercises/performed', (req, res) => {

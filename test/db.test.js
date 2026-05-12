@@ -320,6 +320,33 @@ test('inline template warmup set is checkable and excluded from volume', () => {
   assert.equal(session.total_volume, 1000);
 });
 
+test('current template snapshot exports latest sets and assisted net weight', () => {
+  db.logBodyWeight('2026-05-12', 90);
+  const { templateId, deIds } = buildTemplate('Smoke Snapshot Pull', [
+    { name: 'Smoke Snapshot Assisted Pullup', targetSets: 2, targetReps: '6' },
+  ]);
+  db.updateDayExercise(deIds[0], { is_assisted: 1 });
+
+  const workout = db.initWorkoutFromTemplate('2026-05-12', templateId);
+  const full = db.getWorkoutFull(workout.id);
+  db.saveWorkoutExercise(full[0].id, [
+    { weight: 25, reps: 6, target_reps: 6, completed: 1 },
+    { weight: 20, reps: 6, target_reps: 6, completed: 1 },
+  ]);
+
+  const snapshot = db.getCurrentTemplateSnapshot();
+  assert.equal(snapshot.current_bodyweight.weight_kg, 90);
+
+  const template = snapshot.templates.find((t) => t.template_id === templateId);
+  const exercise = template.exercises[0];
+  assert.equal(exercise.flags.assisted, true);
+  assert.equal(exercise.latest_session.date, '2026-05-12');
+  assert.equal(exercise.latest_sets[0].assistance_kg, 25);
+  assert.equal(exercise.latest_sets[0].net_weight_kg, 65);
+  assert.equal(exercise.latest_sets[1].assistance_kg, 20);
+  assert.equal(exercise.latest_sets[1].net_weight_kg, 70);
+});
+
 // --- Template duplication naming ------------------------------------------
 
 test('duplicateTemplate auto-numbers repeated copies', () => {
