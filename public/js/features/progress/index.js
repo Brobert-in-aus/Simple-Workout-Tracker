@@ -19,6 +19,41 @@ async function saveBodyWeight(date, weightKg) {
   invalidateBodyCache();
 }
 
+function getDownloadFilename(response, fallback) {
+  const disposition = response.headers.get('content-disposition') || '';
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match) return decodeURIComponent(utf8Match[1].replace(/"/g, ''));
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+  return plainMatch ? plainMatch[1] : fallback;
+}
+
+async function downloadExport(url, fallbackFilename, button) {
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Exporting...';
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Export failed (${response.status})`);
+    const blob = await response.blob();
+    const filename = getDownloadFilename(response, fallbackFilename);
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = filename;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    showToast('Export ready');
+  } catch (error) {
+    showToast(error.message || 'Export failed');
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
 export async function loadBodyTab() {
   const tab = document.getElementById('tab-body');
   if (!tab.querySelector('.progress-shell')) {
@@ -76,14 +111,14 @@ function renderProgressShell(container) {
     });
   });
 
-  container.querySelector('.progress-full-export-btn').addEventListener('click', () => {
-    window.location.href = '/api/export/json';
+  container.querySelector('.progress-full-export-btn').addEventListener('click', (e) => {
+    downloadExport('/api/export/json', 'workout-tracker-export.json', e.currentTarget);
   });
-  container.querySelector('.progress-template-json-btn').addEventListener('click', () => {
-    window.location.href = '/api/export/templates-current.json';
+  container.querySelector('.progress-template-json-btn').addEventListener('click', (e) => {
+    downloadExport('/api/export/templates-current.json', 'template-snapshot.json', e.currentTarget);
   });
-  container.querySelector('.progress-template-csv-btn').addEventListener('click', () => {
-    window.location.href = '/api/export/templates-current.csv';
+  container.querySelector('.progress-template-csv-btn').addEventListener('click', (e) => {
+    downloadExport('/api/export/templates-current.csv', 'template-snapshot.csv', e.currentTarget);
   });
   container.querySelector('.progress-import-btn').addEventListener('click', () => {
     openHealthImportModal();
