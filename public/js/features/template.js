@@ -259,6 +259,7 @@ export async function loadTemplate() {
 
       headerMain.addEventListener('click', () => {
         body.classList.toggle('open');
+        tmplEl.classList.toggle('is-open', body.classList.contains('open'));
         if (body.classList.contains('open')) {
           loadTemplateExercises(tmpl.id, body, isStretch);
         }
