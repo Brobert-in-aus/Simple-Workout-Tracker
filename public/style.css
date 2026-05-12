@@ -141,6 +141,7 @@ html, body {
 }
 
 .template-legend-btn {
+  margin-left: auto;
   width: 28px;
   padding-left: 0;
   padding-right: 0;
@@ -758,6 +759,7 @@ html, body {
   padding: 0 14px 10px;
   align-items: center;
   flex-wrap: wrap;
+  width: 100%;
 }
 
 .template-day-label {

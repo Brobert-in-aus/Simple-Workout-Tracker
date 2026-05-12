@@ -17,16 +17,16 @@ async function getTemplates() {
 function openTemplateToggleLegend(isStretch) {
   const rows = isStretch
     ? [
-      ['Dur', 'Track the exercise as time or seconds instead of weight and reps.'],
+      ['Dur', 'Track the exercise as time (in seconds) instead of weight and reps.'],
     ]
     : [
       ['SS', 'Pair this exercise with the next one as a superset.'],
-      ['GS', 'Add this exercise into an adjacent superset to make a larger group.'],
+      ['GS', 'Add this exercise into an adjacent superset to make a larger group. Only appears on exercises next to supersets.'],
       ['Warm', 'Mark the whole exercise as warmup work, excluded from progress and volume.'],
-      ['Dur', 'Track the exercise as time or seconds instead of weight and reps.'],
+      ['Dur', 'Track the exercise as time (in seconds) instead of weight and reps.'],
       ['F', 'Mark sets as AMRAP/failure sets.'],
-      ['Last', 'Use AMRAP only on the final set.'],
-      ['Asst', 'Assisted movement: entered weight is assistance, so volume uses bodyweight minus assistance.'],
+      ['Last', 'Mark only the final set as AMRAP. Only appears when the exercise is marked as AMRAP.'],
+      ['Asst', 'Assisted movement: entered weight is assistance. Volume calculations use bodyweight minus assistance.'],
     ];
 
   openAppModal('Template Toggles', `
