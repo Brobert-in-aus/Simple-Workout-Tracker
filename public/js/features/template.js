@@ -1,7 +1,7 @@
 import { api } from '../core/api.js';
 import { getDayNameShort } from '../core/dates.js';
 import { state, CHAIN_SVG_BROKEN, CHAIN_SVG_LINKED, invalidateScheduleCache, invalidateTemplatesCache } from '../core/state.js';
-import { showToast } from '../core/ui.js';
+import { openAppModal, showToast } from '../core/ui.js';
 import { loadWeek } from './workout.js';
 
 async function getSchedule() {
@@ -12,6 +12,33 @@ async function getSchedule() {
 async function getTemplates() {
   if (!state.templatesCache) state.templatesCache = await api('/api/templates');
   return state.templatesCache;
+}
+
+function openTemplateToggleLegend(isStretch) {
+  const rows = isStretch
+    ? [
+      ['Dur', 'Track the exercise as time or seconds instead of weight and reps.'],
+    ]
+    : [
+      ['SS', 'Pair this exercise with the next one as a superset.'],
+      ['GS', 'Add this exercise into an adjacent superset to make a larger group.'],
+      ['Warm', 'Mark the whole exercise as warmup work, excluded from progress and volume.'],
+      ['Dur', 'Track the exercise as time or seconds instead of weight and reps.'],
+      ['F', 'Mark sets as AMRAP/failure sets.'],
+      ['Last', 'Use AMRAP only on the final set.'],
+      ['Asst', 'Assisted movement: entered weight is assistance, so volume uses bodyweight minus assistance.'],
+    ];
+
+  openAppModal('Template Toggles', `
+    <div class="template-legend">
+      ${rows.map(([label, desc]) => `
+        <div class="template-legend-row">
+          <span class="template-legend-key">${label}</span>
+          <span class="template-legend-copy">${desc}</span>
+        </div>
+      `).join('')}
+    </div>
+  `);
 }
 
 export async function loadTemplate() {
@@ -213,6 +240,17 @@ export async function loadTemplate() {
       headerMain.appendChild(chevron);
       headerActions.appendChild(typeToggleBtn);
       headerActions.appendChild(duplicateBtn);
+      const legendBtn = document.createElement('button');
+      legendBtn.className = 'btn btn-sm btn-outline template-legend-btn';
+      legendBtn.type = 'button';
+      legendBtn.textContent = '?';
+      legendBtn.title = 'Template toggle legend';
+      legendBtn.setAttribute('aria-label', 'Template toggle legend');
+      legendBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openTemplateToggleLegend(isStretch);
+      });
+      headerActions.appendChild(legendBtn);
       header.appendChild(headerMain);
       header.appendChild(headerActions);
 
