@@ -487,6 +487,7 @@ function renderWeightSelection(svg, points, selection, readout) {
   layer.appendChild(rect);
 
   [start, end].forEach((pos, idx) => {
+    const handleName = idx === 0 ? 'start' : 'end';
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     line.setAttribute('x1', pos.x);
     line.setAttribute('x2', pos.x);
@@ -495,12 +496,21 @@ function renderWeightSelection(svg, points, selection, readout) {
     line.setAttribute('class', 'weight-selection-edge');
     layer.appendChild(line);
 
+    const handleZone = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    handleZone.setAttribute('x', pos.x - 10);
+    handleZone.setAttribute('y', top);
+    handleZone.setAttribute('width', 20);
+    handleZone.setAttribute('height', bottom - top);
+    handleZone.setAttribute('class', 'weight-selection-handle-zone');
+    handleZone.dataset.handle = handleName;
+    layer.appendChild(handleZone);
+
     const handle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
     handle.setAttribute('cx', pos.x);
     handle.setAttribute('cy', pos.y);
     handle.setAttribute('r', 6);
     handle.setAttribute('class', 'weight-selection-handle');
-    handle.dataset.handle = idx === 0 ? 'start' : 'end';
+    handle.dataset.handle = handleName;
     layer.appendChild(handle);
   });
 
@@ -525,6 +535,22 @@ function nearestWeightPointIndex(svg, points, event) {
   ), positions[0]).index;
 }
 
+function getWeightSelectionEdgeMode(svg, points, selection, event) {
+  if (selection.start == null || selection.end == null) return null;
+  const positions = getWeightChartPositions(svg, points);
+  const startIndex = Math.min(selection.start, selection.end);
+  const endIndex = Math.max(selection.start, selection.end);
+  const start = positions[startIndex];
+  const end = positions[endIndex];
+  if (!start || !end) return null;
+
+  const x = getSvgPointX(svg, event);
+  const edgeTolerance = Math.max(12, Math.min(28, (end.x - start.x) * 0.2));
+  if (Math.abs(x - start.x) <= edgeTolerance) return 'start';
+  if (Math.abs(x - end.x) <= edgeTolerance) return 'end';
+  return null;
+}
+
 function wireWeightTrendChart(container, points) {
   const card = container.querySelector('.js-weight-trend-card');
   const svg = card?.querySelector('.progress-chart-svg');
@@ -543,14 +569,15 @@ function wireWeightTrendChart(container, points) {
   };
 
   svg.addEventListener('pointerdown', (e) => {
-    const handle = e.target.closest('.weight-selection-handle');
+    const handle = e.target.closest('.weight-selection-handle, .weight-selection-handle-zone');
     const index = nearestWeightPointIndex(svg, points, e);
     if (index == null) return;
+    const edgeMode = handle ? handle.dataset.handle : getWeightSelectionEdgeMode(svg, points, selection, e);
     pointerState = {
       pointerId: e.pointerId,
       startIndex: index,
       lastIndex: index,
-      mode: handle ? handle.dataset.handle : 'select',
+      mode: edgeMode || 'select',
       moved: false,
     };
     svg.setPointerCapture(e.pointerId);

@@ -2260,6 +2260,12 @@ html, body {
   pointer-events: none;
 }
 
+.weight-selection-handle-zone {
+  fill: transparent;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
 .weight-selection-handle {
   fill: var(--stretch-text);
   stroke: #fff;
