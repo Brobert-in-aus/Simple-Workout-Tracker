@@ -41,6 +41,107 @@ function openTemplateToggleLegend(isStretch) {
   `);
 }
 
+function clearScheduleDragMarkers(container) {
+  container.querySelectorAll('.schedule-chip').forEach((chip) => {
+    chip.classList.remove('dragging', 'drag-over-before', 'drag-over-after');
+  });
+}
+
+function getScheduleChipIds(container) {
+  return [...container.querySelectorAll('.schedule-chip[data-schedule-id]')]
+    .map((chip) => parseInt(chip.dataset.scheduleId, 10));
+}
+
+function getScheduleDropPlan(container, sourceId, targetChip, clientX) {
+  if (!targetChip) return null;
+  const targetId = parseInt(targetChip.dataset.scheduleId, 10);
+  if (!Number.isFinite(sourceId) || !Number.isFinite(targetId) || sourceId === targetId) return null;
+
+  const ids = getScheduleChipIds(container);
+  const fromIdx = ids.indexOf(sourceId);
+  if (fromIdx < 0) return null;
+  ids.splice(fromIdx, 1);
+
+  const rect = targetChip.getBoundingClientRect();
+  const targetIdx = ids.indexOf(targetId);
+  if (targetIdx < 0) return null;
+  const insertAt = clientX < rect.left + rect.width / 2 ? targetIdx : targetIdx + 1;
+  ids.splice(insertAt, 0, sourceId);
+  return {
+    ids,
+    side: clientX < rect.left + rect.width / 2 ? 'before' : 'after',
+  };
+}
+
+async function saveScheduleOrder(dayIndex, ids) {
+  await api('/api/schedule/reorder', { method: 'PUT', body: { day_index: dayIndex, ids } });
+  invalidateScheduleCache();
+  loadTemplate();
+  loadWeek();
+}
+
+function wireScheduleTouchReorder(chip, chipsContainer, entry, dayIndex) {
+  let dragState = null;
+
+  chip.addEventListener('touchstart', (e) => {
+    if (e.target.closest('.schedule-chip-remove') || e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    dragState = {
+      sourceId: entry.id,
+      chip,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      lastX: touch.clientX,
+      active: false,
+      targetChip: null,
+      ids: null,
+    };
+  }, { passive: true });
+
+  chip.addEventListener('touchmove', (e) => {
+    if (!dragState || e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    dragState.lastX = touch.clientX;
+    const dx = touch.clientX - dragState.startX;
+    const dy = touch.clientY - dragState.startY;
+    if (!dragState.active && Math.hypot(dx, dy) < 8) return;
+
+    dragState.active = true;
+    e.preventDefault();
+    chip.classList.add('dragging');
+    clearScheduleDragMarkers(chipsContainer);
+    chip.classList.add('dragging');
+
+    const element = document.elementFromPoint(touch.clientX, touch.clientY);
+    const targetChip = element ? element.closest('.schedule-chip[data-schedule-id]') : null;
+    if (!targetChip || !chipsContainer.contains(targetChip) || targetChip === chip) {
+      dragState.targetChip = null;
+      dragState.ids = null;
+      return;
+    }
+
+    const plan = getScheduleDropPlan(chipsContainer, dragState.sourceId, targetChip, touch.clientX);
+    if (!plan) return;
+    targetChip.classList.add(plan.side === 'before' ? 'drag-over-before' : 'drag-over-after');
+    dragState.targetChip = targetChip;
+    dragState.ids = plan.ids;
+  }, { passive: false });
+
+  chip.addEventListener('touchend', async () => {
+    if (!dragState) return;
+    const stateToSave = dragState;
+    dragState = null;
+    clearScheduleDragMarkers(chipsContainer);
+    if (!stateToSave.active || !stateToSave.ids) return;
+    await saveScheduleOrder(dayIndex, stateToSave.ids);
+  });
+
+  chip.addEventListener('touchcancel', () => {
+    dragState = null;
+    clearScheduleDragMarkers(chipsContainer);
+  });
+}
+
 export async function loadTemplate() {
   invalidateScheduleCache();
   invalidateTemplatesCache();
@@ -76,7 +177,7 @@ export async function loadTemplate() {
 
     for (const entry of assigned) {
       const chip = document.createElement('span');
-      chip.className = 'schedule-chip';
+      chip.className = `schedule-chip${entry.template_is_stretch ? ' schedule-chip-stretch' : ''}`;
       chip.draggable = true;
       chip.dataset.scheduleId = String(entry.id);
       chip.innerHTML = `${entry.template_name} <button class="schedule-chip-remove" data-schedule-id="${entry.id}">&times;</button>`;
@@ -95,14 +196,13 @@ export async function loadTemplate() {
         chip.classList.add('dragging');
       });
       chip.addEventListener('dragend', () => {
-        chip.classList.remove('dragging');
-        chipsContainer.querySelectorAll('.schedule-chip').forEach((c) => c.classList.remove('drag-over-before', 'drag-over-after'));
+        clearScheduleDragMarkers(chipsContainer);
         dragSrcId = null;
       });
       chip.addEventListener('dragover', (e) => {
         e.preventDefault();
         if (dragSrcId === entry.id) return;
-        chipsContainer.querySelectorAll('.schedule-chip').forEach((c) => c.classList.remove('drag-over-before', 'drag-over-after'));
+        clearScheduleDragMarkers(chipsContainer);
         const rect = chip.getBoundingClientRect();
         chip.classList.add(e.clientX < rect.left + rect.width / 2 ? 'drag-over-before' : 'drag-over-after');
       });
@@ -114,21 +214,11 @@ export async function loadTemplate() {
         chip.classList.remove('drag-over-before', 'drag-over-after');
         if (dragSrcId == null || dragSrcId === entry.id) return;
 
-        const allChips = [...chipsContainer.querySelectorAll('.schedule-chip[data-schedule-id]')];
-        const ids = allChips.map((c) => parseInt(c.dataset.scheduleId));
-        const fromIdx = ids.indexOf(dragSrcId);
-        ids.splice(fromIdx, 1);
-
-        const rect = chip.getBoundingClientRect();
-        const targetIdx = ids.indexOf(entry.id);
-        const insertAt = e.clientX < rect.left + rect.width / 2 ? targetIdx : targetIdx + 1;
-        ids.splice(insertAt, 0, dragSrcId);
-
-        await api('/api/schedule/reorder', { method: 'PUT', body: { day_index: i, ids } });
-        invalidateScheduleCache();
-        loadTemplate();
-        loadWeek();
+        const plan = getScheduleDropPlan(chipsContainer, dragSrcId, chip, e.clientX);
+        if (!plan) return;
+        await saveScheduleOrder(i, plan.ids);
       });
+      wireScheduleTouchReorder(chip, chipsContainer, entry, i);
 
       chipsContainer.appendChild(chip);
     }

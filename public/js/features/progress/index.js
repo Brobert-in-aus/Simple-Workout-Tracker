@@ -339,14 +339,16 @@ async function renderBodySection(container) {
     [...readings].sort((a, b) => a.date.localeCompare(b.date)),
     state.progressTimeRange
   );
+  const weightChartPoints = chartSeries.map((r) => ({ date: r.date, value: r.weight_kg, measured: true }));
   const activeDateCount = chartSeries.length;
   const chartHtml = buildLineChart(
-    chartSeries.map((r) => ({ date: r.date, value: r.weight_kg, measured: true })),
+    weightChartPoints,
     {
       formatY: (v) => v.toFixed(1),
       emptyMsg: 'Add your first weigh-in above to start tracking',
       dotFilter: (point) => point.measured,
       dotClass: 'chart-dot chart-dot-measured',
+      interactivePoints: true,
     }
   );
 
@@ -384,9 +386,10 @@ async function renderBodySection(container) {
         <div class="progress-stat-label">Logged dates</div>
       </div>
     </div>
-    <div class="progress-chart-card">
+    <div class="progress-chart-card no-expand js-weight-trend-card">
       <div class="progress-chart-title">Weight trend</div>
       ${chartHtml}
+      <div class="weight-chart-readout" aria-live="polite"></div>
       <div class="progress-helper-text">${chartHelper}</div>
     </div>
     <div class="progress-history-section">
@@ -395,6 +398,7 @@ async function renderBodySection(container) {
     </div>
   `;
 
+  wireWeightTrendChart(container, weightChartPoints);
   wireExpandableCharts(container);
 
   const todayInput = container.querySelector('.body-today-input');
@@ -422,6 +426,175 @@ async function renderBodySection(container) {
   });
 
   wireBodyHistoryInputs(container.querySelector('.progress-history-list'), container);
+}
+
+function getWeightChartPositions(svg, points) {
+  const hits = [...svg.querySelectorAll('.chart-point-hit')];
+  return hits.map((hit, index) => ({
+    index,
+    point: points[index],
+    x: parseFloat(hit.getAttribute('cx')),
+    y: parseFloat(hit.getAttribute('cy')),
+  })).filter((item) => item.point && Number.isFinite(item.x) && Number.isFinite(item.y));
+}
+
+function ensureWeightSelectionLayer(svg) {
+  let layer = svg.querySelector('.weight-selection-layer');
+  if (layer) return layer;
+  layer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  layer.setAttribute('class', 'weight-selection-layer');
+  svg.appendChild(layer);
+  return layer;
+}
+
+function formatWeightSlope(startPoint, endPoint) {
+  const startDate = new Date(`${startPoint.date}T00:00:00`);
+  const endDate = new Date(`${endPoint.date}T00:00:00`);
+  const days = Math.max(1, Math.round((endDate - startDate) / (24 * 60 * 60 * 1000)));
+  const slope = ((endPoint.value - startPoint.value) / days) * 7;
+  const sign = slope > 0 ? '+' : '';
+  return `${sign}${slope.toFixed(2)} kg/week`;
+}
+
+function renderWeightSelection(svg, points, selection, readout) {
+  const positions = getWeightChartPositions(svg, points);
+  const layer = ensureWeightSelectionLayer(svg);
+  layer.innerHTML = '';
+
+  if (selection.start == null || selection.end == null || positions.length === 0) {
+    if (readout) readout.textContent = '';
+    return;
+  }
+
+  const startIndex = Math.min(selection.start, selection.end);
+  const endIndex = Math.max(selection.start, selection.end);
+  const start = positions[startIndex];
+  const end = positions[endIndex];
+  if (!start || !end) return;
+
+  const viewBox = svg.viewBox.baseVal;
+  const top = 14;
+  const bottom = viewBox.height - 30;
+  const x1 = Math.min(start.x, end.x);
+  const x2 = Math.max(start.x, end.x);
+
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.setAttribute('x', x1);
+  rect.setAttribute('y', top);
+  rect.setAttribute('width', Math.max(2, x2 - x1));
+  rect.setAttribute('height', bottom - top);
+  rect.setAttribute('class', 'weight-selection-band');
+  layer.appendChild(rect);
+
+  [start, end].forEach((pos, idx) => {
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', pos.x);
+    line.setAttribute('x2', pos.x);
+    line.setAttribute('y1', top);
+    line.setAttribute('y2', bottom);
+    line.setAttribute('class', 'weight-selection-edge');
+    layer.appendChild(line);
+
+    const handle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    handle.setAttribute('cx', pos.x);
+    handle.setAttribute('cy', pos.y);
+    handle.setAttribute('r', 6);
+    handle.setAttribute('class', 'weight-selection-handle');
+    handle.dataset.handle = idx === 0 ? 'start' : 'end';
+    layer.appendChild(handle);
+  });
+
+  if (readout) {
+    readout.textContent = `${formatDate(points[startIndex].date)} ${points[startIndex].value.toFixed(1)} kg to ${formatDate(points[endIndex].date)} ${points[endIndex].value.toFixed(1)} kg: ${formatWeightSlope(points[startIndex], points[endIndex])}`;
+  }
+}
+
+function getSvgPointX(svg, event) {
+  const viewBox = svg.viewBox.baseVal;
+  const rect = svg.getBoundingClientRect();
+  const ratio = rect.width ? (event.clientX - rect.left) / rect.width : 0;
+  return viewBox.x + Math.min(1, Math.max(0, ratio)) * viewBox.width;
+}
+
+function nearestWeightPointIndex(svg, points, event) {
+  const x = getSvgPointX(svg, event);
+  const positions = getWeightChartPositions(svg, points);
+  if (positions.length === 0) return null;
+  return positions.reduce((best, pos) => (
+    Math.abs(pos.x - x) < Math.abs(best.x - x) ? pos : best
+  ), positions[0]).index;
+}
+
+function wireWeightTrendChart(container, points) {
+  const card = container.querySelector('.js-weight-trend-card');
+  const svg = card?.querySelector('.progress-chart-svg');
+  if (!card || !svg || points.length === 0) return;
+
+  const readout = card.querySelector('.weight-chart-readout');
+  const selection = { start: null, end: null };
+  let pointerState = null;
+
+  const showPoint = (index) => {
+    const point = points[index];
+    selection.start = null;
+    selection.end = null;
+    renderWeightSelection(svg, points, selection, readout);
+    readout.textContent = `${formatDate(point.date)}: ${point.value.toFixed(1)} kg`;
+  };
+
+  svg.addEventListener('pointerdown', (e) => {
+    const handle = e.target.closest('.weight-selection-handle');
+    const index = nearestWeightPointIndex(svg, points, e);
+    if (index == null) return;
+    pointerState = {
+      pointerId: e.pointerId,
+      startIndex: index,
+      lastIndex: index,
+      mode: handle ? handle.dataset.handle : 'select',
+      moved: false,
+    };
+    svg.setPointerCapture(e.pointerId);
+  });
+
+  svg.addEventListener('pointermove', (e) => {
+    if (!pointerState) return;
+    const index = nearestWeightPointIndex(svg, points, e);
+    if (index == null) return;
+    pointerState.moved = pointerState.moved || index !== pointerState.startIndex;
+    pointerState.lastIndex = index;
+
+    if (pointerState.mode === 'start') {
+      selection.start = index;
+    } else if (pointerState.mode === 'end') {
+      selection.end = index;
+    } else {
+      selection.start = pointerState.startIndex;
+      selection.end = index;
+    }
+    renderWeightSelection(svg, points, selection, readout);
+  });
+
+  const finishPointer = (e) => {
+    if (!pointerState) return;
+    if (!pointerState.moved && pointerState.mode === 'select') {
+      showPoint(pointerState.startIndex);
+    } else {
+      if (selection.start === selection.end) {
+        showPoint(selection.start);
+      } else {
+        renderWeightSelection(svg, points, selection, readout);
+      }
+    }
+    try {
+      svg.releasePointerCapture(e.pointerId);
+    } catch (_) {
+      // The pointer may already be released by the browser.
+    }
+    pointerState = null;
+  };
+
+  svg.addEventListener('pointerup', finishPointer);
+  svg.addEventListener('pointercancel', () => { pointerState = null; });
 }
 
 function buildBodyHistoryHtml(readings) {

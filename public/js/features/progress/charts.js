@@ -139,7 +139,13 @@ export function buildLineChart(points, opts = {}) {
 
   const dots = points.map((point, index) => {
     if (!dotFilter(point, index, points)) return '';
-    return `<circle cx="${toX(times[index]).toFixed(1)}" cy="${toY(point.value).toFixed(1)}" r="3.2" class="${dotClass}"/>`;
+    const x = toX(times[index]).toFixed(1);
+    const y = toY(point.value).toFixed(1);
+    const dataAttrs = `data-index="${index}" data-date="${point.date}" data-value="${point.value}"`;
+    return `
+      <circle cx="${x}" cy="${y}" r="3.2" class="${dotClass}"/>
+      ${opts.interactivePoints ? `<circle cx="${x}" cy="${y}" r="11" class="chart-point-hit" ${dataAttrs}/>` : ''}
+    `;
   }).join('');
 
   return `

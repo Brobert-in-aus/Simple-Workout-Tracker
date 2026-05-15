@@ -45,6 +45,15 @@ function initWorkoutDoubleTap(loadWorkout) {
     const cards = document.querySelectorAll('#exercises-list .exercise-card:not(.skipped):not(.preview-card)');
     let target = null;
     for (const card of cards) {
+      const stretchDoneBtn = card.querySelector('.stretch-done-btn');
+      if (stretchDoneBtn) {
+        if (!stretchDoneBtn.classList.contains('done')) {
+          target = card;
+          break;
+        }
+        continue;
+      }
+
       const checks = card.querySelectorAll('.set-check');
       if (checks.length === 0) continue;
       if (!Array.from(checks).every((check) => check.classList.contains('done'))) {

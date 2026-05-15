@@ -21,9 +21,11 @@ export async function loadWeek() {
   const schedule = await getSchedule();
   const dayTemplates = {};
   for (const s of schedule) {
-    if (s.template_is_stretch) continue;
     if (!dayTemplates[s.day_index]) dayTemplates[s.day_index] = [];
-    dayTemplates[s.day_index].push(s.template_name);
+    dayTemplates[s.day_index].push({
+      name: s.template_name,
+      isStretch: !!s.template_is_stretch,
+    });
   }
 
   const weekEnd = shiftDate(state.currentWeekStart, 6);
@@ -36,9 +38,12 @@ export async function loadWeek() {
   for (const w of rangeData) {
     if (!w.is_stretch) {
       startedSet.add(w.date);
-      if (!actualWorkouts[w.date]) actualWorkouts[w.date] = [];
-      actualWorkouts[w.date].push(w.template_name);
     }
+    if (!actualWorkouts[w.date]) actualWorkouts[w.date] = [];
+    actualWorkouts[w.date].push({
+      name: w.template_name,
+      isStretch: !!w.is_stretch,
+    });
   }
 
   const strip = document.getElementById('week-strip');
@@ -65,12 +70,17 @@ export async function loadWeek() {
     el.dataset.date = dateStr;
 
     const dateObj = new Date(`${dateStr}T00:00:00`);
-    const workoutLabel = names.length > 0 ? names.join(', ') : '';
+    const workoutLabel = names.length > 0
+      ? names.map((item) => item.name).join(', ')
+      : '';
+    const workoutLabelHtml = names.length > 0
+      ? names.map((item, idx) => `${idx > 0 ? ', ' : ''}<span class="${item.isStretch ? 'week-day-workout-stretch' : ''}">${item.name}</span>`).join('')
+      : 'Rest';
 
     el.innerHTML = `
       <div class="week-day-name">${getDayNameShort(i)}</div>
       <div class="week-day-date">${dateObj.getDate()}</div>
-      <div class="week-day-workout ${workoutLabel ? '' : 'rest'}">${workoutLabel || 'Rest'}${hasStarted ? ' <span class="week-day-done">&#x2713;</span>' : ''}</div>
+      <div class="week-day-workout ${workoutLabel ? '' : 'rest'}">${workoutLabelHtml}${hasStarted ? ' <span class="week-day-done">&#x2713;</span>' : ''}</div>
     `;
 
     el.addEventListener('click', () => {
